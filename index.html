@@ -99,12 +99,40 @@ main > .meta { text-align: center; }
 .agenda li { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--borde); overflow-wrap: anywhere; }
 .pie-legal { font-size: 14px; color: var(--tinta-2); margin-top: 24px; }
 
-.barra { position: fixed; left: 0; right: 0; bottom: 0; display: grid; grid-template-columns: repeat(4, 1fr); background: var(--papel); border-top: 3px solid var(--tinta); padding-bottom: env(safe-area-inset-bottom); }
-.barra button { min-height: 58px; background: none; border: 0; font-weight: 700; font-size: 16px; padding: 4px; }
+.barra { position: fixed; left: 0; right: 0; bottom: 0; display: grid; grid-template-columns: .8fr .9fr 1.05fr 1.1fr 1fr; background: var(--papel); border-top: 3px solid var(--tinta); padding-bottom: env(safe-area-inset-bottom); }
+.barra button { min-height: 58px; background: none; border: 0; font-weight: 700; font-size: 14.5px; line-height: 1.1; padding: 4px 2px; }
 .barra button[aria-current] { background: var(--senal); color: var(--senal-tinta); }
 @media (min-width: 700px) { main { padding-top: 24px; } }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
 @media print { .barra, .cab, .acciones { display: none; } }
+
+.casilla { display: flex; align-items: center; gap: 10px; margin: 10px 0; font-weight: 700; min-height: 44px; }
+.casilla input { width: 26px; height: 26px; min-height: 26px; padding: 0; flex: none; accent-color: #14212B; }
+.sub-carta { margin-top: 10px; padding-top: 6px; border-top: 1px dashed var(--borde); }
+.bloque-carta { margin-top: 24px; padding-top: 6px; border-top: 3px solid var(--tinta); }
+.boton-archivo { display: flex; align-items: center; justify-content: center; text-align: center; cursor: pointer; }
+.oculto { position: absolute; width: 1px; height: 1px; min-height: 1px; opacity: 0; padding: 0; border: 0; }
+.oculto:focus-visible + *, .boton-archivo:focus-within { outline: 3px solid #0A62C9; }
+
+.opciones { display: grid; gap: 10px; }
+.opcion { display: block; width: 100%; text-align: left; background: var(--papel); border: 2px solid var(--tinta); border-radius: 4px; padding: 14px; }
+.opcion strong { display: block; font-size: 21px; }
+.opcion span { display: block; color: var(--tinta-2); font-size: 15.5px; }
+.opcion.principal { background: var(--senal); }
+.opcion.principal, .opcion.principal strong, .opcion.principal span { color: #14212B; }
+.placa-nuevo .primario + .primario { margin-top: 8px; }
+.placa-nuevo .primario.grande { min-height: 58px; font-size: 19px; }
+.sello.tipo { border-color: var(--tinta-2); color: var(--tinta-2); margin-right: 6px; }
+.izq { text-align: left; }
+
+.agenda li.editando, .agenda li.borrando { display: block; background: var(--papel); padding: 10px 12px; margin: 8px 0; border: 2px solid var(--tinta); border-radius: 4px; }
+.agenda .dato { flex: 1; min-width: 0; }
+.botones-fila { display: flex; gap: 14px; flex: none; }
+.peligro { display: block; width: 100%; min-height: 54px; margin-top: 10px; padding: 10px 16px; border-radius: 4px; font-weight: 700; background: #A81E12; color: #fff; border: 2px solid #A81E12; }
+.anadir { margin-top: 10px; }
+.anadir summary { display: flex; align-items: center; justify-content: center; min-height: 50px; border: 2px dashed var(--borde); border-radius: 4px; font-weight: 700; cursor: pointer; list-style: none; }
+.anadir summary::-webkit-details-marker { display: none; }
+.anadir[open] summary { margin-bottom: 10px; }
 </style>
 </head>
 <body>
@@ -2634,18 +2662,133 @@ var qrcode = function() {
     return pdf.save({ updateFieldAppearances: false });
   }
 
-  root.DecaPdf = { crearPdf, fechaHora, fechaCorta, limpio };
+  /* Carta de porte: una por envío y tres ejemplares (arts. 10, 10 bis y 11 de la Ley 15/2009). */
+  async function crearCartaPdf(doc, libs) {
+    const { PDFDocument, StandardFonts, rgb } = libs.PDFLib;
+    const pdf = await PDFDocument.create();
+    const reg = await pdf.embedFont(StandardFonts.Helvetica);
+    const neg = await pdf.embedFont(StandardFonts.HelveticaBold);
+    pdf.setTitle(`Carta de porte ${doc.codigo}`);
+    pdf.setSubject('Carta de porte. Ley 15/2009');
+    pdf.setAuthor(limpio(doc.transportista.nombre));
+    pdf.setCreator('DeCA Montiel');
+    pdf.setProducer('DeCA Montiel');
+    pdf.setCreationDate(new Date(doc.emitido));
+    pdf.setModificationDate(new Date(doc.emitido));
+    const A4 = [595.28, 841.89], M = 36, ANCHO = A4[0] - M * 2;
+    const tinta = rgb(0.07, 0.11, 0.14), suave = rgb(0.33, 0.38, 0.42), linea = rgb(0.72, 0.76, 0.79);
+    const EJEMPLARES = ['Ejemplar 1: para el cargador', 'Ejemplar 2: acompaña a la mercancía', 'Ejemplar 3: para el transportista'];
+    let page, y;
+
+    function lineas(t, font, size, ancho) {
+      const out = []; let actual = '';
+      for (const palabra of limpio(t).split(' ')) {
+        const prueba = actual ? actual + ' ' + palabra : palabra;
+        if (font.widthOfTextAtSize(prueba, size) <= ancho) { actual = prueba; continue; }
+        if (actual) out.push(actual);
+        actual = palabra;
+        while (font.widthOfTextAtSize(actual, size) > ancho) {
+          let n = actual.length - 1;
+          while (n > 1 && font.widthOfTextAtSize(actual.slice(0, n), size) > ancho) n--;
+          out.push(actual.slice(0, n)); actual = actual.slice(n);
+        }
+      }
+      out.push(actual);
+      return out;
+    }
+    const alturaPares = (pares, ancho) => pares.reduce((h, [k, v]) => h + 8.5 + lineas(v, reg, 9, ancho).length * 10.8 + 2.5, 0);
+    function bloque(titulo, pares, x, yy, w, h) {
+      page.drawRectangle({ x, y: yy - h, width: w, height: h, borderColor: linea, borderWidth: 0.7 });
+      page.drawText(limpio(titulo), { x: x + 6, y: yy - 13, size: 9.5, font: neg, color: tinta });
+      let c = yy - 18;
+      for (const [k, v] of pares) {
+        page.drawText(limpio(k), { x: x + 6, y: c - 7, size: 6.8, font: reg, color: suave });
+        c -= 8.5;
+        lineas(v, reg, 9, w - 12).forEach(l => { page.drawText(l, { x: x + 6, y: c - 8.5, size: 9, font: reg, color: tinta }); c -= 10.8; });
+        c -= 2.5;
+      }
+    }
+    function fila(a, b) {
+      const w = (ANCHO - 8) / 2;
+      const h = Math.max(alturaPares(a[1], w - 12), b ? alturaPares(b[1], w - 12) : 0) + 22;
+      if (y - h < M + 96) nuevaPagina();
+      bloque(a[0], a[1], M, y, w, h);
+      if (b) bloque(b[0], b[1], M + w + 8, y, w, h);
+      y -= h + 6;
+    }
+    function nuevaPagina(titulo) {
+      page = pdf.addPage(A4); y = A4[1] - M;
+      if (titulo) {
+        page.drawText('Carta de porte', { x: M, y: y - 18, size: 19, font: neg, color: tinta });
+        page.drawText(limpio(titulo), { x: A4[0] - M - neg.widthOfTextAtSize(limpio(titulo), 10), y: y - 15, size: 10, font: neg, color: tinta });
+        y -= 26;
+      }
+    }
+
+    const fechas = e => e.fecha || doc.fecha;
+    const dinero = v => { const n = parseFloat(String(v || '').replace(',', '.')); return isNaN(n) ? '' : n.toFixed(2).replace('.', ',') + ' EUR'; };
+    doc.envios.forEach((e, n) => {
+      EJEMPLARES.forEach(ej => {
+        nuevaPagina(ej);
+        const emitida = `${limpio(doc.carta.lugarEmision)}, ${fechaHora(doc.emitido)}`;
+        lineas(`Emitida en ${emitida}. Ref. ${doc.codigo}, versión ${doc.version}${doc.envios.length > 1 ? `, envío ${n + 1} de ${doc.envios.length}` : ''}.${doc.sustituye ? ` Sustituye a la versión ${doc.sustituye.version}. Motivo: ${doc.sustituye.motivo}.` : ''}`, reg, 8.5, ANCHO)
+          .forEach(l => { page.drawText(l, { x: M, y: y - 9, size: 8.5, font: reg, color: suave }); y -= 11; });
+        y -= 5;
+        const parCarg = [['Nombre o razón social', doc.cargador.nombre], ['NIF', doc.cargador.nif], ['Dirección', doc.cargador.domicilio]];
+        const parPort = [['Nombre o razón social', doc.transportista.nombre], ['NIF', doc.transportista.nif], ['Dirección', doc.transportista.domicilio || '']];
+        if (doc.transportista.tarjeta) parPort.push(['Tarjeta de transporte', doc.transportista.tarjeta]);
+        if (e.tercero) parPort.push(['Tercero que recibe por su cuenta', e.tercero]);
+        fila(['Cargador', parCarg], ['Transportista efectivo (porteador)', parPort]);
+        const parDest = [['Nombre o razón social', e.destinatario.nombre], ['Dirección', e.destinatario.direccion]];
+        if (e.destinatario.notificaciones) parDest.push(['Dirección para notificaciones', e.destinatario.notificaciones]);
+        const exp = doc.carta.expedidor || {};
+        fila(['Destinatario', parDest], exp.nombre ? ['Expedidor', [['Nombre o razón social', exp.nombre], ['NIF', exp.nif], ['Dirección', exp.domicilio]]] : ['Vehículo', [['Matrícula', doc.vehiculo.matricula + (doc.vehiculo.remolque ? ' + ' + doc.vehiculo.remolque : '')]].concat(doc.conductor ? [['Conductor', doc.conductor]] : [])]);
+        if (exp.nombre) fila(['Vehículo', [['Matrícula', doc.vehiculo.matricula + (doc.vehiculo.remolque ? ' + ' + doc.vehiculo.remolque : '')]].concat(doc.conductor ? [['Conductor', doc.conductor]] : [])]);
+        fila(['Recogida', [['Lugar', e.origen], ['Fecha y hora', fechaCorta(fechas(e)) + (e.horaRecogida ? ' a las ' + e.horaRecogida : '')]]],
+             ['Entrega prevista', [['Lugar', e.destino], ['Fecha y hora', fechaCorta(e.fechaEntrega) + (e.horaEntrega ? ' a las ' + e.horaEntrega : '')]]]);
+        const parMerc = [['Naturaleza', e.naturaleza], ['Peso o cantidad', `${e.cantidad} ${e.unidad}`], ['Bultos', String(e.bultos)], ['Embalaje', e.embalaje]];
+        if (e.marcas) parMerc.push(['Marcas de identificación', e.marcas]);
+        parMerc.push(['Mercancía peligrosa', e.peligrosa === 'si' ? `Sí. ${e.denominacionAdr}` : 'No']);
+        const parPrecio = e.precioAparte ? [['Precio y gastos', `Constan en otro documento escrito: ${e.referenciaPrecio}`]] : [['Precio acordado', dinero(e.precio)], ['Gastos previsibles', e.gastos ? dinero(e.gastos) : 'Ninguno']];
+        parPrecio.push(['Paga', e.pagador === 'destinatario' ? 'Destinatario' : 'Cargador']);
+        if (e.valor) parPrecio.push(['Valor declarado o interés especial', e.valor]);
+        fila(['Mercancía', parMerc], ['Precio', parPrecio]);
+        const otros = [['Observaciones o reservas', doc.observaciones || 'Ninguna']];
+        if (doc.carta.instrucciones) otros.push(['Instrucciones sobre trámites administrativos', doc.carta.instrucciones]);
+        if (doc.aec) otros.push(['Autorización especial de circulación', doc.aec]);
+        fila(['Otros datos', otros]);
+        /* Firmas */
+        if (y - 92 < M + 14) nuevaPagina();
+        const w3 = (ANCHO - 16) / 3, hF = 82;
+        ['Firma del cargador', 'Firma del transportista', 'Recibí del destinatario: fecha, firma y reservas'].forEach((t, i) => {
+          const x = M + i * (w3 + 8);
+          page.drawRectangle({ x, y: y - hF, width: w3, height: hF, borderColor: linea, borderWidth: 0.7 });
+          lineas(t, neg, 8, w3 - 12).forEach((l, j) => page.drawText(l, { x: x + 6, y: y - 12 - j * 9.5, size: 8, font: neg, color: tinta }));
+        });
+        y -= hF;
+      });
+    });
+    const paginas = pdf.getPages();
+    paginas.forEach((p, i) => {
+      p.drawLine({ start: { x: M, y: M + 11 }, end: { x: A4[0] - M, y: M + 11 }, thickness: 0.6, color: linea });
+      p.drawText(limpio(`${doc.codigo}. Carta de porte, Ley 15/2009 del contrato de transporte terrestre de mercancías.`), { x: M, y: M + 2, size: 7, font: reg, color: suave });
+      p.drawText(`${i + 1} / ${paginas.length}`, { x: A4[0] - M - 24, y: M + 2, size: 7, font: reg, color: suave });
+    });
+    return pdf.save({ updateFieldAppearances: false });
+  }
+
+  root.DecaPdf = { crearPdf, crearCartaPdf, fechaHora, fechaCorta, limpio };
   if (typeof module !== 'undefined') module.exports = root.DecaPdf;
 })(typeof window !== 'undefined' ? window : globalThis);
 </script>
 <script>/* DeCA Montiel: aplicación propia para generar el documento de control. */
 (function () {
-  const BUILD = 'build-20261102-03';
+  const BUILD = 'build-20261102-05';
   const BUCKET = 'deca';
   const $ = s => document.querySelector(s);
   const app = () => $('#app');
   const esc = t => String(t == null ? '' : t).replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
-  const { fechaHora, fechaCorta, crearPdf } = window.DecaPdf;
+  const { fechaHora, fechaCorta, crearPdf, crearCartaPdf } = window.DecaPdf;
 
   /* ---------- Almacenamiento local seguro ---------- */
   const ls = {
@@ -2676,6 +2819,7 @@ var qrcode = function() {
   }
   const regTodos = () => tx('reg', 'readonly', s => s.getAll());
   const regPon = r => tx('reg', 'readwrite', s => s.put(r));
+  const regBorra = id => tx('reg', 'readwrite', s => s.delete(id));
   const pdfPon = (k, bytes) => tx('pdf', 'readwrite', s => s.put(bytes, k));
   const pdfLee = k => tx('pdf', 'readonly', s => s.get(k));
 
@@ -2704,13 +2848,13 @@ var qrcode = function() {
   }
   async function token() {
     const s = sesion(); const c = conf();
-    if (!s) throw errorHumano('Tienes que volver a entrar con tu correo y contraseña en Ajustes.');
+    if (!s) throw errorHumano('Tienes que volver a entrar con tu correo y contraseña.');
     if (Date.now() < s.exp - 60000) return s.access;
     const r = await fetch(`${c.url}/auth/v1/token?grant_type=refresh_token`, {
       method: 'POST', headers: { apikey: c.key, 'Content-Type': 'application/json' },
       body: JSON.stringify({ refresh_token: s.refresh }),
     });
-    if (!r.ok) { ls.del('deca_sesion'); throw errorHumano('La sesión ha caducado. Vuelve a entrar con tu correo y contraseña en Ajustes.'); }
+    if (!r.ok) { ls.del('deca_sesion'); throw errorHumano('La sesión ha caducado. Vuelve a entrar con tu correo y contraseña.'); }
     guardaSesion(await r.json());
     return sesion().access;
   }
@@ -2744,6 +2888,15 @@ var qrcode = function() {
     });
     if (!r.ok) throw errorHumano(`El historial no se ha podido guardar en el almacén (error ${r.status}).`);
   }
+  /* Elimina de verdad una fila de la agenda. El almacén no permite borrar documentos. */
+  async function borraRegistro(id) {
+    const r = await fetch(`${conf().url}/rest/v1/registros?id=eq.${encodeURIComponent(id)}`, {
+      method: 'DELETE', headers: await cabeceras({ Prefer: 'return=representation' }),
+    });
+    if (r.status === 401 || r.status === 403) throw errorHumano('El almacén aún no permite eliminar. Ejecuta el código de actualización en el SQL Editor de Supabase.');
+    if (!r.ok) throw errorHumano(`No se ha podido eliminar (error ${r.status}).`);
+    await regBorra(id);
+  }
   async function guardaRegistro(id, tipo, datos, enSegundoPlano) {
     const reg = { id, tipo, datos, actualizado: new Date().toISOString(), pendiente: true };
     await regPon(reg);
@@ -2765,6 +2918,11 @@ var qrcode = function() {
       const l = mapa.get(x.id);
       if (!l || (!l.pendiente && l.actualizado !== x.actualizado)) await regPon({ ...x, pendiente: false });
     }
+    /* Lo eliminado desde otro dispositivo también desaparece aquí. */
+    if (remotos.length < 5000) {
+      const hay = new Set(remotos.map(x => x.id));
+      for (const l of mapa.values()) if (!l.pendiente && !hay.has(l.id)) await regBorra(l.id);
+    }
     return { ok: true };
   }
 
@@ -2775,14 +2933,29 @@ var qrcode = function() {
   const agenda = t => registros.filter(r => r.tipo === 'agenda' && r.datos.clase === t && !r.datos.quitado).map(r => r.datos);
   const ajustesDatos = () => {
     const r = registros.find(x => x.id === 'ajustes');
-    return { nombre: 'Talleres Montiel S.L.', nif: '', domicilio: '', tarjeta: '', tipoTarjeta: 'nose', ...(r ? r.datos : {}) };
+    return { nombre: 'Talleres Montiel S.L.', nif: '', domicilio: '', tarjeta: '', tipoTarjeta: 'nose', lugarEmision: 'Mengíbar (Jaén)', ...(r ? r.datos : {}) };
   };
   const hoyISO = () => {
     const p = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Madrid', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
     return p;
   };
   const clave = t => String(t || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').slice(0, 60);
-  const envioVacio = () => ({ fecha: '', origen: '', destino: '', naturaleza: '', cantidad: '', unidad: 'kg' });
+  const envioVacio = () => ({
+    fecha: '', origen: '', destino: '', naturaleza: '', cantidad: '', unidad: 'kg',
+    horaRecogida: '', fechaEntrega: '', horaEntrega: '', destinatario: { nombre: '', direccion: '', notificaciones: '' },
+    bultos: '', marcas: '', embalaje: '', peligrosa: 'no', denominacionAdr: '',
+    precio: '', gastos: '', precioAparte: false, referenciaPrecio: '', pagador: 'cargador', valor: '', tercero: '',
+  });
+  const cartaVacia = () => ({ activa: true, lugarEmision: ajustesDatos().lugarEmision, expedidor: { nombre: '', nif: '', domicilio: '' }, instrucciones: '' });
+  /* Completa con valores por defecto lo que falte en borradores o documentos anteriores. */
+  function normaliza(f) {
+    f.carta = { ...cartaVacia(), ...(f.carta || {}), expedidor: { nombre: '', nif: '', domicilio: '', ...((f.carta || {}).expedidor || {}) } };
+    f.tipo = f.tipo || (f.carta.activa ? 'ambos' : 'deca');
+    f.carta.activa = f.tipo !== 'deca';
+    f.envios = (f.envios || []).map(e => ({ ...envioVacio(), ...e, destinatario: { ...envioVacio().destinatario, ...(e.destinatario || {}) } }));
+    f.cargador = { extranjero: false, ...f.cargador };
+    return f;
+  }
   const fechasDe = d => [...new Set(d.envios.map(e => e.fecha || d.fecha))].sort();
   const textoFecha = d => {
     const f = fechasDe(d);
@@ -2792,18 +2965,18 @@ var qrcode = function() {
   function formNuevo(base) {
     const a = ajustesDatos();
     const v = agenda('vehiculo')[0] || {};
-    return {
+    return normaliza({
       fecha: hoyISO(),
-      cargador: { nombre: '', nif: '', domicilio: '' },
+      cargador: { nombre: '', nif: '', domicilio: '', extranjero: false },
       transportista: { nombre: a.nombre, nif: a.nif, domicilio: a.domicilio, tarjeta: a.tarjeta },
       envios: [envioVacio()],
       vehiculo: { matricula: v.matricula || '', remolque: v.remolque || '' },
       conductor: '', aec: '', observaciones: '', motivo: '',
       ...(base || {}),
-    };
+    });
   }
 
-  const PREFIJO = { cargador: 'c-', vehiculo: 'v-', conductor: 'p-', lugar: 'l-', mercancia: 'm-' };
+  const PREFIJO = { cargador: 'c-', vehiculo: 'v-', conductor: 'p-', lugar: 'l-', mercancia: 'm-', destinatario: 'd-' };
   function guardaAgenda(clase, datos, base, enSegundoPlano) {
     const id = PREFIJO[clase] + clave(base);
     return guardaRegistro(id, 'agenda', { ...datos, id, clase }, enSegundoPlano);
@@ -2866,12 +3039,12 @@ var qrcode = function() {
       for (let id = driveCola()[0]; id; id = driveCola()[0]) {
         const d = decas().find(x => x.id === id);
         if (d) {
-          const nombre = `${d.fecha}_${d.codigo}-v${d.version}.pdf`;
-          const ya = await driveBusca(`name='${nombre}' and '${carpeta}' in parents and trashed=false`);
-          if (!ya) {
+          for (const f of ficherosDe(d)) {
+            const ya = await driveBusca(`name='${f.nombre}' and '${carpeta}' in parents and trashed=false`);
+            if (ya) continue;
             const cuerpo = new FormData();
-            cuerpo.append('metadata', new Blob([JSON.stringify({ name: nombre, parents: [carpeta] })], { type: 'application/json' }));
-            cuerpo.append('file', new Blob([await bytesDe(d)], { type: 'application/pdf' }));
+            cuerpo.append('metadata', new Blob([JSON.stringify({ name: f.nombre, parents: [carpeta] })], { type: 'application/json' }));
+            cuerpo.append('file', new Blob([await f.datos()], { type: 'application/pdf' }));
             await driveFetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', { method: 'POST', body: cuerpo });
           }
         }
@@ -2882,22 +3055,76 @@ var qrcode = function() {
   }
 
   /* ---------- Validación ---------- */
-  const nifBien = n => /^[A-Z0-9]{9}$/.test(String(n || '').replace(/[\s.-]/g, '').toUpperCase());
+  const limpiaId = n => String(n || '').replace(/[\s.-]/g, '').toUpperCase();
+  /* Comprueba el dígito de control de DNI, NIE y CIF españoles. */
+  function nifValido(n) {
+    const v = limpiaId(n);
+    if (/^0+$/.test(v.slice(1, 8))) return false;
+    const LETRAS = 'TRWAGMYFPDXBNJZSQVHLCKE';
+    if (/^\d{8}[A-Z]$/.test(v)) return LETRAS[parseInt(v.slice(0, 8), 10) % 23] === v[8];
+    if (/^[XYZ]\d{7}[A-Z]$/.test(v)) return LETRAS[parseInt('XYZ'.indexOf(v[0]) + v.slice(1, 8), 10) % 23] === v[8];
+    if (/^[ABCDEFGHJNPQRSUVW]\d{7}[0-9A-J]$/.test(v)) {
+      let suma = 0;
+      [...v.slice(1, 8)].forEach((c, i) => {
+        const d = +c;
+        suma += i % 2 ? d : (x => Math.floor(x / 10) + x % 10)(d * 2);
+      });
+      const control = (10 - suma % 10) % 10;
+      const letra = 'JABCDEFGHI'[control];
+      if ('PQRSW'.includes(v[0]) || v[0] === 'N') return v[8] === letra;
+      if ('ABEH'.includes(v[0])) return v[8] === String(control);
+      return v[8] === String(control) || v[8] === letra;
+    }
+    return false;
+  }
+  const matriculaValida = m => {
+    const v = limpiaId(m);
+    return /^\d{4}[A-Z]{3}$/.test(v) || /^[A-Z]{1,2}\d{4}[A-Z]{0,3}$/.test(v) || /^[RSE]\d{4}[A-Z]{3}$/.test(v);
+  };
+  const numeroValido = c => /^\d+([.,]\d{1,3})?$/.test(String(c || '').trim()) && parseFloat(String(c).replace(',', '.')) > 0;
+  const dineroValido = c => /^\d+([.,]\d{1,2})?$/.test(String(c || '').trim());
   function errores(f, modificando) {
     const e = {};
     if (!f.fecha) e.fecha = 'Indica la fecha del transporte.';
     if (!f.cargador.nombre.trim()) e['cargador.nombre'] = 'Falta el nombre del cargador.';
     if (!f.cargador.nif.trim()) e['cargador.nif'] = 'Falta el NIF del cargador.';
+    else if (!f.cargador.extranjero && !nifValido(f.cargador.nif)) e['cargador.nif'] = 'Este NIF no es válido. Revísalo, o marca «Empresa extranjera» si lo es.';
     if (!f.cargador.domicilio.trim()) e['cargador.domicilio'] = 'Falta el domicilio del cargador.';
     if (!f.transportista.nombre.trim()) e['transportista.nombre'] = 'Falta el nombre del transportista.';
     if (!f.transportista.nif.trim()) e['transportista.nif'] = 'Falta el NIF del transportista.';
+    else if (!nifValido(f.transportista.nif)) e['transportista.nif'] = 'Este NIF no es válido. Compáralo con la tarjeta de identificación fiscal de la empresa.';
+    if (f.transportista.tarjeta.trim() && !/\d/.test(f.transportista.tarjeta)) e['transportista.tarjeta'] = 'Aquí va el número de la tarjeta de transporte. Déjalo vacío si no lo tienes.';
     if (!f.vehiculo.matricula.trim()) e['vehiculo.matricula'] = 'Falta la matrícula.';
+    else if (!matriculaValida(f.vehiculo.matricula)) e['vehiculo.matricula'] = 'Escribe solo la matrícula, por ejemplo 1234 ABC.';
+    if (f.vehiculo.remolque.trim() && !matriculaValida(f.vehiculo.remolque)) e['vehiculo.remolque'] = 'Aquí va solo la matrícula del remolque, como R 1234 ABC. Déjalo vacío si el camión no lleva.';
     f.envios.forEach((x, i) => {
       if (!x.origen.trim()) e[`envios.${i}.origen`] = 'Falta el origen.';
       if (!x.destino.trim()) e[`envios.${i}.destino`] = 'Falta el destino.';
       if (!x.naturaleza.trim()) e[`envios.${i}.naturaleza`] = 'Indica qué mercancía se lleva.';
-      if (!(parseFloat(String(x.cantidad).replace(',', '.')) > 0)) e[`envios.${i}.cantidad`] = 'Indica el peso o la cantidad.';
+      if (!numeroValido(x.cantidad)) e[`envios.${i}.cantidad`] = 'Escribe solo el número, como 800. La unidad se elige al lado.';
     });
+    if (f.carta.activa) {
+      if (!f.carta.lugarEmision.trim()) e['carta.lugarEmision'] = 'Indica dónde se emite la carta de porte.';
+      if (!f.transportista.domicilio.trim()) e['transportista.domicilio'] = 'La carta de porte necesita el domicilio del transportista.';
+      const exp = f.carta.expedidor;
+      if ((exp.nombre.trim() || exp.nif.trim()) && (!exp.nombre.trim() || !exp.domicilio.trim() || !nifValido(exp.nif))) e['carta.expedidor.nombre'] = 'Si hay expedidor, hacen falta su nombre, un NIF válido y su dirección.';
+      f.envios.forEach((x, i) => {
+        const r = `envios.${i}.`;
+        if (!x.destinatario.nombre.trim()) e[r + 'destinatario.nombre'] = 'Falta el destinatario.';
+        if (!x.destinatario.direccion.trim()) e[r + 'destinatario.direccion'] = 'Falta la dirección del destinatario.';
+        if (!x.fechaEntrega) e[r + 'fechaEntrega'] = 'Indica la fecha prevista de entrega.';
+        else if (x.fechaEntrega < (x.fecha || f.fecha)) e[r + 'fechaEntrega'] = 'La entrega no puede ser anterior a la recogida.';
+        if (!/^[1-9]\d*$/.test(String(x.bultos).trim())) e[r + 'bultos'] = 'Indica cuántos bultos o piezas son.';
+        if (!x.embalaje.trim()) e[r + 'embalaje'] = 'Indica el embalaje, o escribe «Sin embalaje».';
+        if (x.peligrosa === 'si' && !x.denominacionAdr.trim()) e[r + 'denominacionAdr'] = 'Indica la denominación de la mercancía peligrosa.';
+        if (x.precioAparte) {
+          if (!x.referenciaPrecio.trim()) e[r + 'referenciaPrecio'] = 'Indica en qué documento consta el precio.';
+        } else {
+          if (!dineroValido(x.precio) || parseFloat(String(x.precio).replace(',', '.')) <= 0) e[r + 'precio'] = 'Indica el precio en euros, solo con números.';
+        }
+        if (String(x.gastos).trim() && !dineroValido(x.gastos)) e[r + 'gastos'] = 'Escribe los gastos en euros, solo con números.';
+      });
+    }
     if (modificando && !f.motivo.trim()) e.motivo = 'Explica por qué cambia el documento.';
     return e;
   }
@@ -2934,14 +3161,15 @@ var qrcode = function() {
     </div>`;
   }
   function barra() {
-    const items = [['inicio', 'Hoy'], ['nuevo', 'Nuevo'], ['historico', 'Histórico'], ['ajustes', 'Ajustes']];
-    return `<nav class="barra" aria-label="Secciones">${items.map(([v, t]) => `<button data-ir="${v}" ${est.vista === v ? 'aria-current="page"' : ''}>${t}</button>`).join('')}</nav>`;
+    const items = [['inicio', 'Hoy'], ['nuevo', 'Nuevo'], ['historico', 'Histórico'], ['basedatos', 'Base de datos'], ['ajustes', 'Ajustes']];
+    return `<nav class="barra" aria-label="Secciones">${items.map(([v, t]) => `<button data-ir="${v}" ${est.vista === v || (v === 'nuevo' && est.vista === 'revisar') ? 'aria-current="page"' : ''}>${t}</button>`).join('')}</nav>`;
   }
   function fila(d) {
     const e = d.envios[0];
     const sust = decas().some(x => x.sustituye && x.sustituye.id === d.id);
     return `<button class="fila" data-ver="${esc(d.id)}">
       <span class="ruta">${esc(e.origen)} a ${esc(e.destino)}${d.envios.length > 1 ? ` y ${d.envios.length - 1} más` : ''}</span>
+      <span class="sello tipo">${!d.url ? 'Carta de porte' : d.carta ? 'DeCA y carta' : 'DeCA'}</span>
       <span class="meta">${esc(textoFecha(d))}, ${esc(d.vehiculo.matricula)}, ${esc(d.cargador.nombre)}</span>
       ${sust ? '<span class="sello sust">Sustituido</span>' : ''}
     </button>`;
@@ -2953,10 +3181,12 @@ var qrcode = function() {
     const faltan = !a.nif;
     return `<section class="placa-nuevo">
         <h1>¿Sale un porte para otra empresa?</h1>
-        <p>Genera el documento antes de arrancar. Con mercancía propia no hace falta.</p>
-        <button class="primario grande" data-ir="nuevo">Nuevo DeCA</button>
+        <p>Genera los documentos antes de arrancar. Con mercancía propia no hace falta DeCA.</p>
+        <button class="primario grande" data-nuevo="deca">Crear DeCA</button>
+        <button class="primario grande" data-nuevo="carta">Crear carta de porte</button>
+        <button class="primario grande" data-nuevo="ambos">Crear los dos</button>
       </section>
-      ${faltan ? `<p class="nota">Antes del primer documento, escribe el NIF de la empresa en <button class="enlace" data-ir="ajustes">Ajustes</button>.</p>` : ''}
+      ${faltan ? `<p class="nota">Antes del primer documento, escribe el NIF de la empresa en <button class="enlace" data-ir="basedatos">Base de datos</button>.</p>` : ''}
       <h2>Documentos de hoy</h2>
       ${lista.length ? `<div class="lista">${lista.map(fila).join('')}</div>` : '<p class="vacio">Hoy no hay ninguno.</p>'}`;
   }
@@ -2965,18 +3195,71 @@ var qrcode = function() {
     const op = a => uniq(a).map(v => `<option value="${esc(v)}">`).join('');
     return `<datalist id="dl-lugares">${op(agenda('lugar').map(r => r.nombre))}</datalist>
       <datalist id="dl-mercancia">${op(agenda('mercancia').map(r => r.nombre))}</datalist>
+      <datalist id="dl-embalaje">${op(['Sin embalaje', 'Palé', 'Caja', 'Jaula', 'Flejado', 'Eslingado'])}</datalist>
       <datalist id="dl-conductor">${op(agenda('conductor').map(c => c.nombre))}</datalist>`;
+  }
+  function camposCarta(e, i, f) {
+    const r = `envios.${i}.`;
+    const destinatarios = agenda('destinatario');
+    return `<div class="sub-carta"><h3>Para la carta de porte</h3>
+      ${destinatarios.length ? `<div class="campo"><label for="sel-dest-${i}">Destinatario de la agenda</label>
+        <select id="sel-dest-${i}" data-dest="${i}"><option value="">Escribir uno nuevo</option>
+        ${destinatarios.map(d => `<option value="${esc(d.id)}" ${d.nombre === e.destinatario.nombre ? 'selected' : ''}>${esc(d.nombre)}</option>`).join('')}</select></div>` : ''}
+      ${campo(r + 'destinatario.nombre', 'Destinatario', e.destinatario.nombre)}
+      ${campo(r + 'destinatario.direccion', 'Dirección del destinatario', e.destinatario.direccion)}
+      ${campo(r + 'destinatario.notificaciones', 'Dirección para notificaciones', e.destinatario.notificaciones, { opcional: true })}
+      ${campo(r + 'horaRecogida', 'Hora de recogida', e.horaRecogida, { tipo: 'time', opcional: true })}
+      <div class="dos">
+        ${campo(r + 'fechaEntrega', 'Entrega prevista', e.fechaEntrega, { tipo: 'date' })}
+        ${campo(r + 'horaEntrega', 'Hora', e.horaEntrega, { tipo: 'time', opcional: true })}
+      </div>
+      <div class="dos">
+        ${campo(r + 'bultos', 'Bultos o piezas', e.bultos, { modo: 'numeric' })}
+        ${campo(r + 'embalaje', 'Embalaje', e.embalaje, { lista: 'dl-embalaje' })}
+      </div>
+      ${campo(r + 'marcas', 'Marcas de identificación', e.marcas, { opcional: true })}
+      <div class="campo"><label for="pel${i}">¿Mercancía peligrosa?</label>
+        <select id="pel${i}" data-p="${r}peligrosa" data-repinta><option value="no" ${e.peligrosa !== 'si' ? 'selected' : ''}>No</option><option value="si" ${e.peligrosa === 'si' ? 'selected' : ''}>Sí</option></select></div>
+      ${e.peligrosa === 'si' ? campo(r + 'denominacionAdr', 'Denominación según la normativa', e.denominacionAdr) : ''}
+      <label class="casilla"><input type="checkbox" data-chk="${r}precioAparte" ${e.precioAparte ? 'checked' : ''}> El precio consta en otro documento escrito</label>
+      ${e.precioAparte ? campo(r + 'referenciaPrecio', 'Documento donde consta', e.referenciaPrecio, { ayuda: 'Por ejemplo, el número de contrato o de pedido.' }) : `<div class="dos">
+        ${campo(r + 'precio', 'Precio del transporte (€)', e.precio, { modo: 'decimal' })}
+        ${campo(r + 'gastos', 'Gastos previsibles (€)', e.gastos, { modo: 'decimal', opcional: true })}
+      </div>`}
+      <div class="campo"><label for="pag${i}">Quién paga</label>
+        <select id="pag${i}" data-p="${r}pagador"><option value="cargador" ${e.pagador !== 'destinatario' ? 'selected' : ''}>Cargador</option><option value="destinatario" ${e.pagador === 'destinatario' ? 'selected' : ''}>Destinatario</option></select></div>
+      ${campo(r + 'valor', 'Valor declarado o interés especial en la entrega', e.valor, { opcional: true })}
+      ${campo(r + 'tercero', 'Tercero que recibe la mercancía por cuenta del transportista', e.tercero, { opcional: true })}
+    </div>`;
+  }
+  const TITULOS = { deca: 'Nuevo DeCA', carta: 'Nueva carta de porte', ambos: 'Nuevo DeCA y carta de porte' };
+  function vistaElegir() {
+    return `<h1>¿Qué quieres generar?</h1>
+      <div class="opciones">
+        <button class="opcion" data-nuevo="deca"><strong>DeCA</strong><span>El documento de control con QR para la inspección. Pide solo sus datos.</span></button>
+        <button class="opcion" data-nuevo="carta"><strong>Carta de porte</strong><span>El documento del contrato, con destinatario, entrega y precio, para firmar. No lleva QR ni sustituye al DeCA.</span></button>
+        <button class="opcion principal" data-nuevo="ambos"><strong>DeCA y carta de porte</strong><span>Los dos con los mismos datos. Es lo normal en un porte cobrado.</span></button>
+      </div>`;
   }
   function vistaForm() {
     const f = est.form;
+    if (!f) return vistaElegir();
     const cargadores = agenda('cargador');
     const vehiculos = agenda('vehiculo');
     const mod = est.modificando;
     const hayErr = Object.keys(est.errores).length;
-    return `<h1>${mod ? 'Modificar documento' : 'Nuevo DeCA'}</h1>
-      ${mod ? `<p class="nota">Se creará un PDF nuevo, con otro QR, y el anterior se conservará. El conductor debe recibir el nuevo antes de seguir.</p>
+    return `<h1>${mod ? 'Modificar documento' : TITULOS[f.tipo]}</h1>
+      ${mod ? `<p class="nota">${f.tipo === 'carta' ? 'Se creará una versión nueva de la carta de porte, que habrá que volver a firmar.' : 'Se creará un PDF nuevo, con otro QR, y el anterior se conservará. El conductor debe recibir el nuevo antes de seguir.'}</p>
       ${campo('motivo', 'Motivo del cambio', f.motivo, { area: true })}` : ''}
       ${datalists()}
+      <fieldset><legend>Qué quieres generar</legend>
+        <div class="campo"><label for="f-tipo">Documento</label>
+          <select id="f-tipo" data-p="tipo" data-repinta>
+            ${(mod && !decas().find(x => x.id === mod).url ? [['carta', 'Solo carta de porte']] : mod ? [['deca', 'DeCA'], ['ambos', 'DeCA y carta de porte']] : [['deca', 'DeCA'], ['carta', 'Carta de porte'], ['ambos', 'DeCA y carta de porte']]).map(([v, t]) => `<option value="${v}" ${f.tipo === v ? 'selected' : ''}>${t}</option>`).join('')}
+          </select></div>
+        ${f.carta.activa ? `<p class="ayuda">La carta de porte es obligatoria por cada envío si contratas directamente y el precio supera 150 €. Además, cualquiera de las partes puede exigirla.</p>
+        ${campo('carta.lugarEmision', 'Lugar de emisión', f.carta.lugarEmision)}` : ''}
+      </fieldset>
       <fieldset><legend>Fecha</legend>${campo('fecha', 'Fecha del transporte', f.fecha, { tipo: 'date', ayuda: 'Si agrupas envíos de varios días, cada envío puede llevar su propia fecha.' })}</fieldset>
       <fieldset><legend>Cargador contractual</legend>
         <p class="ayuda">Quien os contrata el transporte.</p>
@@ -2985,26 +3268,35 @@ var qrcode = function() {
           ${cargadores.map(c => `<option value="${esc(c.id)}" ${c.nif === f.cargador.nif && c.nombre === f.cargador.nombre ? 'selected' : ''}>${esc(c.nombre)}</option>`).join('')}</select></div>` : ''}
         ${campo('cargador.nombre', 'Nombre o razón social', f.cargador.nombre)}
         ${campo('cargador.nif', 'NIF', f.cargador.nif, { mayus: true })}
-        ${campo('cargador.domicilio', 'Domicilio', f.cargador.domicilio)}
+        <label class="casilla"><input type="checkbox" data-chk="cargador.extranjero" ${f.cargador.extranjero ? 'checked' : ''}> Empresa extranjera</label>
+        ${campo('cargador.domicilio', 'Domicilio', f.cargador.domicilio, { ayuda: 'Calle, número o kilómetro y población.' })}
       </fieldset>
       <fieldset><legend>Transportista efectivo</legend>
-        <p class="ayuda">Quien lleva la mercancía. Se rellena con Ajustes.</p>
+        <p class="ayuda">Quien lleva la mercancía. Se rellena con Base de datos.</p>
         ${campo('transportista.nombre', 'Nombre o razón social', f.transportista.nombre)}
         ${campo('transportista.nif', 'NIF', f.transportista.nif, { mayus: true })}
-        ${campo('transportista.tarjeta', 'Autorización de transporte', f.transportista.tarjeta, { opcional: true })}
+        ${f.carta.activa ? campo('transportista.domicilio', 'Domicilio', f.transportista.domicilio) : ''}
+        ${campo('transportista.tarjeta', 'Número de la tarjeta de transporte', f.transportista.tarjeta, { opcional: true })}
       </fieldset>
+      ${f.carta.activa ? `<fieldset><legend>Expedidor</legend>
+        <p class="ayuda">Solo si quien entrega la mercancía es distinto del cargador.</p>
+        ${campo('carta.expedidor.nombre', 'Nombre o razón social', f.carta.expedidor.nombre, { opcional: true })}
+        ${campo('carta.expedidor.nif', 'NIF', f.carta.expedidor.nif, { opcional: true, mayus: true })}
+        ${campo('carta.expedidor.domicilio', 'Dirección', f.carta.expedidor.domicilio, { opcional: true })}
+      </fieldset>` : ''}
       <fieldset><legend>${f.envios.length > 1 ? 'Envíos' : 'Envío'}</legend>
         ${f.envios.map((e, i) => `<div class="envio">
           ${f.envios.length > 1 ? `<div class="envio-cab"><strong>Envío ${i + 1}</strong><button class="enlace" data-quita-envio="${i}">Quitar</button></div>` : ''}
           ${f.envios.length > 1 ? campo(`envios.${i}.fecha`, 'Fecha de este envío', e.fecha, { tipo: 'date', opcional: true, ayuda: 'Déjala vacía si es la misma fecha de arriba.' }) : ''}
-          ${campo(`envios.${i}.origen`, 'Origen', e.origen, { lista: 'dl-lugares' })}
-          ${campo(`envios.${i}.destino`, 'Destino', e.destino, { lista: 'dl-lugares' })}
+          ${campo(`envios.${i}.origen`, 'Origen', e.origen, { lista: 'dl-lugares', ayuda: 'Empresa o dirección, y población.' })}
+          ${campo(`envios.${i}.destino`, 'Destino', e.destino, { lista: 'dl-lugares', ayuda: 'Empresa o dirección, y población.' })}
           ${campo(`envios.${i}.naturaleza`, 'Mercancía', e.naturaleza, { lista: 'dl-mercancia', ayuda: 'Por ejemplo, piezas de hierro para reparación.' })}
           <div class="dos">
             ${campo(`envios.${i}.cantidad`, 'Peso o cantidad', e.cantidad, { modo: 'decimal' })}
             <div class="campo"><label for="u${i}">Unidad</label>
               <select id="u${i}" data-p="envios.${i}.unidad">${['kg', 't', 'piezas', 'palés', 'm³'].map(u => `<option ${u === e.unidad ? 'selected' : ''}>${u}</option>`).join('')}</select></div>
           </div>
+          ${f.carta.activa ? camposCarta(e, i, f) : ''}
         </div>`).join('')}
         <button class="secundario" data-mas-envio>Añadir otro envío</button>
       </fieldset>
@@ -3012,13 +3304,14 @@ var qrcode = function() {
         ${vehiculos.length ? `<div class="campo"><label for="sel-vehiculo">Elegir de la agenda</label>
           <select id="sel-vehiculo" data-agenda="vehiculo"><option value="">Escribir otro</option>
           ${vehiculos.map(v => `<option value="${esc(v.id)}" ${v.matricula === f.vehiculo.matricula ? 'selected' : ''}>${esc(v.matricula)}${v.remolque ? ' + ' + esc(v.remolque) : ''}</option>`).join('')}</select></div>` : ''}
-        ${campo('vehiculo.matricula', 'Matrícula', f.vehiculo.matricula, { mayus: true })}
-        ${campo('vehiculo.remolque', 'Remolque o semirremolque', f.vehiculo.remolque, { mayus: true, opcional: true })}
+        ${campo('vehiculo.matricula', 'Matrícula', f.vehiculo.matricula, { mayus: true, ayuda: 'Solo la matrícula, como 1234 ABC.' })}
+        ${campo('vehiculo.remolque', 'Matrícula del remolque o semirremolque', f.vehiculo.remolque, { mayus: true, opcional: true, ayuda: 'Déjala vacía si es un camión rígido sin remolque.' })}
         ${campo('conductor', 'Conductor', f.conductor, { lista: 'dl-conductor', opcional: true })}
       </fieldset>
       <fieldset><legend>Otros datos</legend>
         ${campo('aec', 'Autorización especial de circulación', f.aec, { opcional: true, ayuda: 'Solo si el vehículo circula con una.' })}
         ${campo('observaciones', 'Observaciones o reservas', f.observaciones, { area: true, opcional: true })}
+        ${f.carta.activa ? campo('carta.instrucciones', 'Instrucciones sobre trámites administrativos', f.carta.instrucciones, { area: true, opcional: true }) : ''}
       </fieldset>
       ${hayErr ? `<p class="error fuerte" role="alert">Faltan ${hayErr} ${hayErr === 1 ? 'dato' : 'datos'}. Están marcados arriba.</p>` : ''}
       <button class="primario grande" data-revisar>Revisar</button>
@@ -3027,8 +3320,15 @@ var qrcode = function() {
   function advertencias(f) {
     const av = [];
     if ([f.fecha, ...f.envios.map(e => e.fecha)].some(x => x && x < hoyISO())) av.push('Hay una fecha anterior a hoy. El documento debe existir antes de empezar el transporte.');
-    if (!nifBien(f.cargador.nif)) av.push('El NIF del cargador no tiene 9 caracteres. Compruébalo si es una empresa española.');
-    if (!nifBien(f.transportista.nif)) av.push('El NIF del transportista no tiene 9 caracteres. Compruébalo.');
+    if (!/\d|s\/n|km/i.test(f.cargador.domicilio) || !/[,(]|\d{5}/.test(f.cargador.domicilio)) av.push('El domicilio del cargador parece incompleto. Comprueba que lleve número o kilómetro y población.');
+    f.envios.forEach(e => {
+      [e.origen, e.destino].forEach(l => { if (!/[,(]|\d{5}/.test(l)) av.push(`«${l}» debe permitir identificar el lugar. Añade la población, por ejemplo «${l}, Linares».`); });
+    });
+    if (f.tipo === 'carta') av.push('Vas a generar solo la carta de porte. Si este viaje necesita DeCA, hay que llevarlo también: elige «DeCA y carta de porte» o pide al cargador que lo emita.');
+    if (f.carta.activa) {
+      if (f.envios.some(e => e.peligrosa === 'si')) av.push('Con mercancía peligrosa debe llevarse también la documentación ADR que corresponda.');
+      av.push(`La carta de porte debe firmarse por el cargador y el transportista. Se generará ${f.envios.length === 1 ? 'con 3 ejemplares' : `una por envío, con 3 ejemplares cada una`}.`);
+    }
     const t = ajustesDatos().tipoTarjeta;
     if (t === 'mpc') av.push('Tu tarjeta está indicada como MPC. Esa tarjeta no cubre portes para otras empresas cobrando por ellos, y este documento no lo soluciona. Consúltalo antes de salir.');
     if (t === 'nose') av.push('No has indicado el tipo de tarjeta del camión. Para portes de otras empresas hace falta autorización de transporte público (MDP).');
@@ -3045,19 +3345,49 @@ var qrcode = function() {
         <dt>Transportista efectivo</dt><dd>${esc(f.transportista.nombre)}<br>NIF ${esc(f.transportista.nif)}</dd>
         ${f.envios.map((e, i) => `<dt>${f.envios.length > 1 ? `Envío ${i + 1}` : 'Envío'}</dt><dd>${f.envios.length > 1 ? `${esc(fechaCorta(e.fecha || f.fecha))}<br>` : ''}${esc(e.origen)} a ${esc(e.destino)}<br>${esc(e.naturaleza)}, ${esc(e.cantidad)} ${esc(e.unidad)}</dd>`).join('')}
         <dt>Vehículo</dt><dd>${esc(f.vehiculo.matricula)}${f.vehiculo.remolque ? ' + ' + esc(f.vehiculo.remolque) : ''}${f.conductor ? `<br>${esc(f.conductor)}` : ''}</dd>
+        ${f.carta.activa ? `<dt>Datos de la carta de porte</dt><dd>${f.envios.map(e => `${esc(e.destinatario.nombre)}, entrega ${esc(fechaCorta(e.fechaEntrega))}, ${esc(e.bultos)} bultos, ${esc(e.embalaje)}, ${e.precioAparte ? `precio en ${esc(e.referenciaPrecio)}` : `${esc(e.precio)} €`}, paga ${esc(e.pagador)}`).join('<br>')}</dd>` : ''}
         ${f.aec ? `<dt>Autorización especial</dt><dd>${esc(f.aec)}</dd>` : ''}
         ${f.observaciones ? `<dt>Observaciones</dt><dd>${esc(f.observaciones)}</dd>` : ''}
         ${est.modificando ? `<dt>Motivo del cambio</dt><dd>${esc(f.motivo)}</dd>` : ''}
       </dl>
       ${est.aviso ? `<p class="error fuerte" role="alert">${esc(est.aviso)}</p>` : ''}
-      <button class="primario grande" data-generar ${est.ocupado ? 'disabled' : ''}>${est.ocupado ? 'Generando y comprobando…' : 'Generar DeCA'}</button>
+      <button class="primario grande" data-generar ${est.ocupado ? 'disabled' : ''}>${est.ocupado ? 'Generando y comprobando…' : { deca: 'Generar DeCA', carta: 'Generar carta de porte', ambos: 'Generar DeCA y carta de porte' }[f.tipo]}</button>
       <button class="secundario" data-volver-form ${est.ocupado ? 'disabled' : ''}>Corregir datos</button>`;
+  }
+  function bloqueCarta(d) {
+    const fir = d.cartaFirmada;
+    const estado = !fir ? 'Sin firmar.' : fir.tipo === 'papel' ? `Firmada en papel, anotado el ${fechaHora(fir.fecha)}.` : fir.tipo === 'electronica' ? `PDF con firma electrónica subido el ${fechaHora(fir.fecha)}.` : `PDF firmado escaneado subido el ${fechaHora(fir.fecha)}.`;
+    return `<section class="bloque-carta"><h2>Carta de porte</h2>
+      <p><strong>${esc(estado)}</strong></p>
+      <p class="ayuda">Tiene precios, así que no va en el enlace público del QR. Debe firmarla el cargador y el transportista, y un ejemplar debe acompañar a la mercancía.</p>
+      <button class="primario" data-carta="${esc(d.id)}">Descargar la carta de porte</button>
+      <button class="secundario" data-compartir-carta="${esc(d.id)}">Enviar la carta de porte</button>
+      ${fir && fir.nombre ? `<button class="secundario" data-firmada="${esc(d.id)}">Abrir la carta firmada</button>` : ''}
+      <h3>Cómo firmarla</h3>
+      <p class="ayuda"><strong>En papel:</strong> imprime los 3 ejemplares y firmadlos los dos. Es la forma más sencilla.</p>
+      ${fir ? '' : `<button class="secundario" data-papel="${esc(d.id)}">Anotar que está firmada en papel</button>`}
+      <p class="ayuda"><strong>Electrónica:</strong> firmad el PDF con certificado digital, con <a href="https://firmaelectronica.gob.es/Home/Descargas.html" target="_blank" rel="noopener">Autofirma</a>, y súbelo aquí. Hace falta que las dos partes estén de acuerdo.</p>
+      <label class="secundario boton-archivo" for="sube-${esc(d.id)}">Subir el PDF firmado</label>
+      <input class="oculto" id="sube-${esc(d.id)}" type="file" accept="application/pdf" data-subir-firmada="${esc(d.id)}">
+    </section>`;
   }
   function vistaDetalle() {
     const d = decas().find(x => x.id === est.detalle);
     if (!d) return '<p class="vacio">No se encuentra el documento.</p>';
     const sucesor = decas().find(x => x.sustituye && x.sustituye.id === d.id);
     const reg = registros.find(r => r.id === d.id);
+    if (!d.url) {
+      return `${sucesor ? `<p class="aviso">Esta carta está sustituida. <button class="enlace" data-ver="${esc(sucesor.id)}">Abrir la vigente</button></p>` : ''}
+        ${est.aviso ? `<p class="${est.avisoBien ? 'ok' : 'aviso'}" role="status">${esc(est.aviso)}</p>` : ''}
+        <h1>Carta de porte</h1>
+        <p class="codigo izq">${esc(d.codigo)}, versión ${esc(d.version)}</p>
+        <p class="ruta-grande izq">${esc(d.envios[0].origen)} a ${esc(d.envios[0].destino)}${d.envios.length > 1 ? ` y ${d.envios.length - 1} más` : ''}</p>
+        <p class="nota">Este documento no lleva DeCA. Si el viaje lo necesita, hay que llevarlo también.</p>
+        ${bloqueCarta(d)}
+        ${driveActivo() ? `<p class="meta">${driveCola().includes(d.id) ? 'Copia en Drive pendiente.' : 'Copia guardada en Drive.'}</p>` : ''}
+        ${sucesor ? '' : `<button class="secundario" data-modificar="${esc(d.id)}">Modificar</button>`}
+        <button class="secundario" data-duplicar="${esc(d.id)}">Usar como base de otra</button>`;
+    }
     return `${sucesor ? `<p class="aviso">Este documento está sustituido. <button class="enlace" data-ver="${esc(sucesor.id)}">Abrir el vigente</button></p>` : ''}
       ${est.aviso ? `<p class="${est.avisoBien ? 'ok' : 'aviso'}" role="status">${esc(est.aviso)}</p>` : ''}
       <div class="placa-qr ${sucesor ? 'apagada' : ''}">${qrSvg(d.url)}</div>
@@ -3068,12 +3398,13 @@ var qrcode = function() {
       ${driveActivo() ? `<p class="meta">${driveCola().includes(d.id) ? 'Copia en Drive pendiente.' : 'Copia guardada en Drive.'}</p>` : ''}
       <div class="acciones">
         <button class="primario" data-compartir="${esc(d.id)}">Enviar al conductor</button>
-        <button class="secundario" data-abrir-pdf="${esc(d.id)}">Abrir el PDF</button>
+        <button class="secundario" data-abrir-pdf="${esc(d.id)}">Abrir el PDF del DeCA</button>
         <button class="secundario" data-comprobar="${esc(d.id)}">Comprobar el enlace</button>
         <button class="secundario" data-copiar="${esc(d.id)}">Copiar el enlace</button>
         ${sucesor ? '' : `<button class="secundario" data-modificar="${esc(d.id)}">Modificar</button>`}
         <button class="secundario" data-duplicar="${esc(d.id)}">Usar como base de otro</button>
-      </div>`;
+      </div>
+      ${d.carta ? bloqueCarta(d) : '<p class="nota">Este documento no tiene carta de porte. Para crearla, pulsa Modificar y elige «DeCA y carta de porte».</p>'}`;
   }
   function vistaHistorico() {
     const q = (est.busca || '').toLowerCase();
@@ -3097,13 +3428,22 @@ create table if not exists public.registros (
 );
 alter table public.registros enable row level security;
 grant select on public.registros to anon;
-grant select, insert, update on public.registros to authenticated;
+grant select, insert, update, delete on public.registros to authenticated;
 
 drop policy if exists "registros_titular" on public.registros;
-create policy "registros_titular" on public.registros
-  for all to authenticated
-  using (auth.jwt()->>'email' = '${m}')
-  with check (auth.jwt()->>'email' = '${m}');
+drop policy if exists "registros_leer" on public.registros;
+create policy "registros_leer" on public.registros
+  for select to authenticated using (auth.jwt()->>'email' = '${m}');
+drop policy if exists "registros_crear" on public.registros;
+create policy "registros_crear" on public.registros
+  for insert to authenticated with check (auth.jwt()->>'email' = '${m}');
+drop policy if exists "registros_cambiar" on public.registros;
+create policy "registros_cambiar" on public.registros
+  for update to authenticated using (auth.jwt()->>'email' = '${m}') with check (auth.jwt()->>'email' = '${m}');
+-- Los documentos no se pueden borrar: solo los datos de la agenda
+drop policy if exists "registros_borrar_agenda" on public.registros;
+create policy "registros_borrar_agenda" on public.registros
+  for delete to authenticated using (auth.jwt()->>'email' = '${m}' and tipo = 'agenda');
 
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 values ('deca', 'deca', true, 5242880, array['application/pdf'])
@@ -3113,7 +3453,23 @@ on conflict (id) do update
 drop policy if exists "deca_subir_titular" on storage.objects;
 create policy "deca_subir_titular" on storage.objects
   for insert to authenticated
-  with check (bucket_id = 'deca' and auth.jwt()->>'email' = '${m}');`;
+  with check (bucket_id = 'deca' and auth.jwt()->>'email' = '${m}');
+
+-- Cartas de porte firmadas: espacio privado, solo para el titular
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('cartas-firmadas', 'cartas-firmadas', false, 15728640, array['application/pdf'])
+on conflict (id) do update
+  set public = false, file_size_limit = 15728640, allowed_mime_types = array['application/pdf'];
+
+drop policy if exists "cartas_subir_titular" on storage.objects;
+create policy "cartas_subir_titular" on storage.objects
+  for insert to authenticated
+  with check (bucket_id = 'cartas-firmadas' and auth.jwt()->>'email' = '${m}');
+
+drop policy if exists "cartas_leer_titular" on storage.objects;
+create policy "cartas_leer_titular" on storage.objects
+  for select to authenticated
+  using (bucket_id = 'cartas-firmadas' and auth.jwt()->>'email' = '${m}');`;
   }
   function vistaPrep() {
     const p = est.prep;
@@ -3139,26 +3495,9 @@ create policy "deca_subir_titular" on storage.objects
       ${conf() && sesion() ? '<button class="secundario" data-ir="ajustes">Volver</button>' : ''}`;
   }
   function vistaAjustes() {
-    const a = est.ajustesForm || ajustesDatos();
-    est.ajustesForm = a;
     return `<h1>Ajustes</h1>
-      <fieldset><legend>Tu empresa, como transportista</legend>
-        <div class="campo"><label for="a-nombre">Nombre o razón social</label><input id="a-nombre" data-a="nombre" value="${esc(a.nombre)}"></div>
-        <div class="campo"><label for="a-nif">NIF</label><input id="a-nif" data-a="nif" value="${esc(a.nif)}" autocapitalize="characters"></div>
-        <div class="campo"><label for="a-dom">Domicilio <span class="op">(opcional)</span></label><input id="a-dom" data-a="domicilio" value="${esc(a.domicilio)}"></div>
-        <div class="campo"><label for="a-tarjeta">Número de autorización <span class="op">(opcional)</span></label><input id="a-tarjeta" data-a="tarjeta" value="${esc(a.tarjeta)}"></div>
-        <div class="campo"><label for="a-tipo">Tipo de tarjeta del camión</label>
-          <select id="a-tipo" data-a="tipoTarjeta">
-            <option value="nose" ${a.tipoTarjeta === 'nose' ? 'selected' : ''}>Aún no lo sé</option>
-            <option value="mdp" ${a.tipoTarjeta === 'mdp' ? 'selected' : ''}>MDP, transporte público</option>
-            <option value="mpc" ${a.tipoTarjeta === 'mpc' ? 'selected' : ''}>MPC, privado complementario</option>
-          </select></div>
-        ${est.aviso ? `<p class="ok" role="status">${esc(est.aviso)}</p>` : ''}
-        <button class="primario" data-guardar-ajustes>Guardar</button>
-      </fieldset>
-      <h2>Agenda</h2>
-      <p>Vehículos, empresas, conductores, sitios y mercancías para no volver a escribirlos.</p>
-      <button class="secundario" data-ir="agenda">Abrir la agenda</button>
+      ${est.aviso ? `<p class="ok" role="status">${esc(est.aviso)}</p>` : ''}
+      <p>Los datos de tu empresa, vehículos y clientes están en <button class="enlace" data-ir="basedatos">Base de datos</button>.</p>
       <h2>Copia en Google Drive</h2>
       ${driveActivo()
         ? `<p>${driveCola().length ? `Faltan ${driveCola().length} PDF por copiar en la carpeta ${DRIVE_CARPETA}.` : `Activada. Cada PDF se copia en la carpeta ${DRIVE_CARPETA}.`}</p>
@@ -3173,31 +3512,113 @@ create policy "deca_subir_titular" on storage.objects
       <button class="secundario" data-salir>Salir de este dispositivo</button>
       <p class="pie-legal">Aplicación propia de Talleres Montiel. No es del Ministerio de Transportes ni está homologada, porque no existe ninguna homologación del DeCA. Marca del programa: ${BUILD}.</p>`;
   }
-  function vistaAgenda() {
-    const lista = (t, txt) => {
-      const l = agenda(t).sort((a, b) => txt(a).localeCompare(txt(b), 'es'));
-      return l.length ? `<ul class="agenda">${l.map(x => `<li><span>${esc(txt(x))}</span><button class="enlace" data-quitar-agenda="${esc(x.id)}">Quitar</button></li>`).join('')}</ul>` : '<p class="vacio">Todavía no hay ninguno.</p>';
+  const CLASES = {
+    vehiculo: {
+      titulo: 'Vehículos', vacio: 'Añade la matrícula de tu camión.',
+      campos: [{ k: 'matricula', et: 'Matrícula', id: 'ag-mat', mayus: true }, { k: 'remolque', et: 'Matrícula del remolque <span class="op">(opcional)</span>', id: 'ag-rem', mayus: true }],
+      valida: x => (!matriculaValida(x.matricula) ? 'Escribe una matrícula válida, como 1234 ABC.' : x.remolque && !matriculaValida(x.remolque) ? 'En remolque va solo su matrícula, o déjalo vacío.' : ''),
+      base: x => x.matricula, txt: x => x.matricula + (x.remolque ? ' + ' + x.remolque : ''),
+    },
+    cargador: {
+      titulo: 'Empresas que os contratan', vacio: 'Todavía no hay ninguna.',
+      campos: [{ k: 'nombre', et: 'Nombre o razón social', id: 'ag-nom' }, { k: 'nif', et: 'NIF', id: 'ag-nif', mayus: true }, { k: 'domicilio', et: 'Domicilio', id: 'ag-dom' }, { k: 'extranjero', et: 'Empresa extranjera', id: 'ag-ext', check: true }],
+      valida: x => (!x.nombre || !x.nif || !x.domicilio ? 'Hacen falta el nombre, el NIF y el domicilio.' : !x.extranjero && !nifValido(x.nif) ? 'Ese NIF no es válido. Revísalo.' : ''),
+      base: x => x.nif, txt: x => `${x.nombre}, ${x.nif}, ${x.domicilio}`,
+    },
+    destinatario: {
+      titulo: 'Destinatarios', vacio: 'Todavía no hay ninguno.',
+      campos: [{ k: 'nombre', et: 'Nombre o razón social', id: 'ag-dnom' }, { k: 'direccion', et: 'Dirección', id: 'ag-ddir' }, { k: 'notificaciones', et: 'Dirección para notificaciones <span class="op">(opcional)</span>', id: 'ag-dnot' }],
+      valida: x => (!x.nombre || !x.direccion ? 'Hacen falta el nombre y la dirección.' : ''),
+      base: x => x.nombre, txt: x => `${x.nombre}, ${x.direccion}`,
+    },
+    conductor: {
+      titulo: 'Conductores', vacio: 'Todavía no hay ninguno.',
+      campos: [{ k: 'nombre', et: 'Nombre y apellidos', id: 'ag-con' }],
+      valida: x => (!x.nombre ? 'Escribe el nombre.' : ''), base: x => x.nombre, txt: x => x.nombre,
+    },
+    lugar: {
+      titulo: 'Sitios de carga y descarga', vacio: 'Todavía no hay ninguno.',
+      campos: [{ k: 'nombre', et: 'Sitio', id: 'ag-lug', ayuda: 'Empresa o dirección, y población.' }],
+      valida: x => (!x.nombre ? 'Escribe el sitio.' : ''), base: x => x.nombre, txt: x => x.nombre,
+    },
+    mercancia: {
+      titulo: 'Mercancías', vacio: 'Todavía no hay ninguna.',
+      campos: [{ k: 'nombre', et: 'Mercancía', id: 'ag-mer' }],
+      valida: x => (!x.nombre ? 'Escribe la mercancía.' : ''), base: x => x.nombre, txt: x => x.nombre,
+    },
+  };
+  function leeCampos(t, prefijo) {
+    const x = {};
+    CLASES[t].campos.forEach(c => {
+      const el = document.getElementById(prefijo + c.id);
+      x[c.k] = c.check ? !!(el && el.checked) : ((el && el.value) || '').trim();
+      if (c.mayus && !c.check) x[c.k] = x[c.k].toUpperCase();
+    });
+    return x;
+  }
+  function entradas(t, prefijo, x) {
+    return CLASES[t].campos.map(c => (c.check
+      ? `<label class="casilla"><input type="checkbox" id="${prefijo}${c.id}" ${x && x[c.k] ? 'checked' : ''}> ${c.et}</label>`
+      : `<div class="campo"><label for="${prefijo}${c.id}">${c.et}</label><input id="${prefijo}${c.id}" value="${esc(x ? x[c.k] : '')}" autocomplete="off" ${c.mayus ? 'autocapitalize="characters"' : ''}>${c.ayuda ? `<p class="ayuda">${esc(c.ayuda)}</p>` : ''}</div>`)).join('');
+  }
+  function vistaBaseDatos() {
+    const a = est.ajustesForm || ajustesDatos();
+    est.ajustesForm = a;
+    const seccion = t => {
+      const C = CLASES[t];
+      const l = agenda(t).sort((p, q) => C.txt(p).localeCompare(C.txt(q), 'es'));
+      const err = est.agError && est.agError.t === t ? `<p class="error" role="alert">${esc(est.agError.m)}</p>` : '';
+      const filas = l.map(x => {
+        if (est.bdEdit === x.id) {
+          return `<li class="editando">${entradas(t, 'ed-', x)}${err}
+            <button class="primario" data-ed-guardar="${esc(x.id)}" data-clase="${t}">Guardar cambios</button>
+            <button class="secundario" data-ed-cancelar>Cancelar</button></li>`;
+        }
+        if (est.bdBorrar === x.id) {
+          return `<li class="borrando"><p><strong>¿Eliminar «${esc(C.txt(x))}» definitivamente?</strong> Los documentos ya creados no cambian.</p>
+            <button class="peligro" data-bd-borrar="${esc(x.id)}">Sí, eliminar</button>
+            <button class="secundario" data-ed-cancelar>No, conservar</button></li>`;
+        }
+        return `<li><span class="dato">${esc(C.txt(x))}</span><span class="botones-fila"><button class="enlace" data-bd-editar="${esc(x.id)}">Editar</button><button class="enlace" data-bd-pedir="${esc(x.id)}">Eliminar</button></span></li>`;
+      }).join('');
+      return `<fieldset><legend>${C.titulo}</legend>
+        ${l.length ? `<ul class="agenda">${filas}</ul>` : `<p class="vacio">${C.vacio}</p>`}
+        <details class="anadir" data-seccion="${t}" ${(est.bdAbiertos || {})[t] ? 'open' : ''}><summary>Añadir</summary>
+          ${entradas(t, '', null)}
+          ${est.bdEdit ? '' : err}
+          <button class="secundario" data-anadir="${t}">Guardar en ${C.titulo.toLowerCase()}</button>
+        </details></fieldset>`;
     };
-    const ent = (id, et, op = '') => `<div class="campo"><label for="${id}">${et}</label><input id="${id}" autocomplete="off" ${op}></div>`;
-    const seccion = (t, titulo, campos, txt) => `<fieldset><legend>${titulo}</legend>
-      ${lista(t, txt)}${campos}
-      ${est.agError && est.agError.t === t ? `<p class="error" role="alert">${esc(est.agError.m)}</p>` : ''}
-      <button class="secundario" data-anadir="${t}">Añadir</button></fieldset>`;
-    return `<h1>Agenda</h1>
-      <p>También se llena sola al generar documentos. Si añades uno con el mismo NIF o matrícula, se actualiza.</p>
-      ${seccion('vehiculo', 'Vehículos', ent('ag-mat', 'Matrícula', 'autocapitalize="characters"') + ent('ag-rem', 'Remolque o semirremolque <span class="op">(opcional)</span>', 'autocapitalize="characters"'), x => x.matricula + (x.remolque ? ' + ' + x.remolque : ''))}
-      ${seccion('cargador', 'Empresas que os contratan', ent('ag-nom', 'Nombre o razón social') + ent('ag-nif', 'NIF', 'autocapitalize="characters"') + ent('ag-dom', 'Domicilio'), x => `${x.nombre}, ${x.nif}`)}
-      ${seccion('conductor', 'Conductores', ent('ag-con', 'Nombre y apellidos'), x => x.nombre)}
-      ${seccion('lugar', 'Sitios de carga y descarga', ent('ag-lug', 'Sitio', 'placeholder="Empresa, pueblo o dirección"'), x => x.nombre)}
-      ${seccion('mercancia', 'Mercancías', ent('ag-mer', 'Mercancía'), x => x.nombre)}
-      <button class="secundario" data-ir="ajustes">Volver a Ajustes</button>`;
+    return `<h1>Base de datos</h1>
+      <p>Todo lo que se guarda para no volver a escribirlo. Lo que cambies aquí se usará en los próximos documentos.</p>
+      <fieldset><legend>Tu empresa, como transportista</legend>
+        <div class="campo"><label for="a-nombre">Nombre o razón social</label><input id="a-nombre" data-a="nombre" value="${esc(a.nombre)}"></div>
+        <div class="campo"><label for="a-nif">NIF</label><input id="a-nif" data-a="nif" value="${esc(a.nif)}" autocapitalize="characters"></div>
+        <div class="campo"><label for="a-dom">Domicilio <span class="op">(necesario para la carta de porte)</span></label><input id="a-dom" data-a="domicilio" value="${esc(a.domicilio)}"></div>
+        <div class="campo"><label for="a-lugar">Lugar de emisión de la carta de porte</label><input id="a-lugar" data-a="lugarEmision" value="${esc(a.lugarEmision)}"></div>
+        <div class="campo"><label for="a-tarjeta">Número de la tarjeta de transporte <span class="op">(opcional)</span></label><input id="a-tarjeta" data-a="tarjeta" value="${esc(a.tarjeta)}"></div>
+        <div class="campo"><label for="a-tipo">Tipo de tarjeta del camión</label>
+          <select id="a-tipo" data-a="tipoTarjeta">
+            <option value="nose" ${a.tipoTarjeta === 'nose' ? 'selected' : ''}>Aún no lo sé</option>
+            <option value="mdp" ${a.tipoTarjeta === 'mdp' ? 'selected' : ''}>MDP, transporte público</option>
+            <option value="mpc" ${a.tipoTarjeta === 'mpc' ? 'selected' : ''}>MPC, privado complementario</option>
+          </select></div>
+        ${a.nif && !nifValido(a.nif) ? '<p class="error" role="alert">Este NIF no es válido. Compáralo con la tarjeta de identificación fiscal de la empresa.</p>' : ''}
+        ${est.aviso ? `<p class="${est.avisoBien === false ? 'aviso' : 'ok'}" role="status">${esc(est.aviso)}</p>` : ''}
+        <button class="primario" data-guardar-ajustes>Guardar</button>
+      </fieldset>
+      ${Object.keys(CLASES).map(seccion).join('')}
+      <fieldset><legend>Documentos</legend>
+        <p>Hay ${decas().length} guardados. No se pueden eliminar, porque la norma pide conservarlos al menos un año. Para corregir uno, ábrelo y pulsa Modificar.</p>
+        <button class="secundario" data-ir="historico">Abrir el histórico</button>
+      </fieldset>`;
   }
   function pinta() {
     const v = est.vista;
     if (!conf() || !sesion()) {
       if (v !== 'prep') est.vista = 'prep';
     }
-    const cuerpo = { inicio: vistaInicio, nuevo: vistaForm, revisar: vistaRevisar, detalle: vistaDetalle, historico: vistaHistorico, ajustes: vistaAjustes, agenda: vistaAgenda, prep: vistaPrep }[est.vista]();
+    const cuerpo = { inicio: vistaInicio, nuevo: vistaForm, revisar: vistaRevisar, detalle: vistaDetalle, historico: vistaHistorico, ajustes: vistaAjustes, basedatos: vistaBaseDatos, prep: vistaPrep }[est.vista]();
     app().innerHTML = `<header class="cab"><span class="marca">DeCA Montiel</span><span class="build">${BUILD}</span></header>
       <main>${cuerpo}</main>${est.vista === 'prep' ? '' : barra()}`;
   }
@@ -3237,30 +3658,39 @@ create policy "deca_subir_titular" on storage.objects
       f.transportista.nif = norm(f.transportista.nif).toUpperCase();
       f.vehiculo.matricula = norm(f.vehiculo.matricula).toUpperCase();
       f.vehiculo.remolque = norm(f.vehiculo.remolque).toUpperCase();
+      f.cargador.nif = f.cargador.extranjero ? f.cargador.nif : limpiaId(f.cargador.nif);
+      f.transportista.nif = limpiaId(f.transportista.nif);
+      f.carta.expedidor.nif = limpiaId(f.carta.expedidor.nif);
+      f.envios.forEach(e => { e.cantidad = String(e.cantidad).trim(); });
       f.envios.forEach(e => { if (!e.fecha || f.envios.length === 1) e.fecha = f.fecha; });
       f.fecha = f.envios.map(e => e.fecha).sort()[0];
       const uuid = crypto.randomUUID();
       const emitido = new Date().toISOString();
       const nombre = `${uuid}.pdf`;
-      const url = `${conf().url}/storage/v1/object/public/${BUCKET}/${nombre}?download`;
+      const conDeca = f.tipo !== 'carta';
+      const url = conDeca ? `${conf().url}/storage/v1/object/public/${BUCKET}/${nombre}?download` : null;
       const previo = est.modificando ? decas().find(x => x.id === est.modificando) : null;
       const doc = {
         id: 'deca-' + uuid, uuid, url, emitido,
-        codigo: previo ? previo.codigo : `DC-${f.fecha.replace(/-/g, '')}-${uuid.slice(0, 6).toUpperCase()}`,
+        codigo: previo ? previo.codigo : `${conDeca ? 'DC' : 'CP'}-${f.fecha.replace(/-/g, '')}-${uuid.slice(0, 6).toUpperCase()}`,
         version: previo ? previo.version + 1 : 1,
         fecha: f.fecha, cargador: f.cargador, transportista: f.transportista, envios: f.envios,
         vehiculo: f.vehiculo, conductor: norm(f.conductor), aec: norm(f.aec), observaciones: norm(f.observaciones),
+        carta: f.carta.activa ? { lugarEmision: norm(f.carta.lugarEmision), expedidor: f.carta.expedidor, instrucciones: norm(f.carta.instrucciones) } : null,
         sustituye: previo ? { id: previo.id, codigo: previo.codigo, version: previo.version, motivo: norm(f.motivo), cambios: compara(previo, f) } : null,
       };
-      const bytes = await crearPdf(doc, { PDFLib: window.PDFLib, qrcode: window.qrcode });
-      if (bytes.length > 5 * 1024 * 1024) throw errorHumano('El PDF supera los 5 MB permitidos. Reduce el número de envíos.');
-      await subirPdf(nombre, bytes);
-      if (!await compruebaEnlace(url)) throw errorHumano('El PDF se ha subido, pero el enlace no lo descarga. No salgas con este documento: revisa que el espacio «deca» del almacén sea público.');
-      await pdfPon(doc.id, bytes);
+      if (conDeca) {
+        const bytes = await crearPdf(doc, { PDFLib: window.PDFLib, qrcode: window.qrcode });
+        if (bytes.length > 5 * 1024 * 1024) throw errorHumano('El PDF supera los 5 MB permitidos. Reduce el número de envíos.');
+        await subirPdf(nombre, bytes);
+        if (!await compruebaEnlace(url)) throw errorHumano('El PDF se ha subido, pero el enlace no lo descarga. No salgas con este documento: revisa que el espacio «deca» del almacén sea público.');
+        await pdfPon(doc.id, bytes);
+      }
       await guardaRegistro(doc.id, 'deca', doc);
       /* Agenda: lo usado queda guardado para la próxima vez */
       await guardaAgenda('cargador', f.cargador, f.cargador.nif || f.cargador.nombre);
       await guardaAgenda('vehiculo', f.vehiculo, f.vehiculo.matricula);
+      if (f.carta.activa) for (const e of f.envios) await guardaAgenda('destinatario', e.destinatario, e.destinatario.nombre);
       for (const e of f.envios) {
         for (const lugar of [e.origen, e.destino]) await guardaAgenda('lugar', { nombre: lugar.trim() }, lugar);
         await guardaAgenda('mercancia', { nombre: e.naturaleza.trim() }, e.naturaleza);
@@ -3271,7 +3701,9 @@ create policy "deca_subir_titular" on storage.objects
       if (driveActivo()) ls.set('deca_drive_cola', [...driveCola(), doc.id]);
       est.ocupado = false; est.form = null; est.modificando = null;
       ir('detalle', { detalle: doc.id });
-      const avisoHecho = 'Documento generado. El enlace se ha comprobado y descarga el PDF. Envíaselo al conductor antes de salir.';
+      const avisoHecho = !conDeca ? 'Carta de porte generada. Descárgala y firmadla el cargador y el transportista.'
+        : doc.carta ? 'DeCA y carta de porte generados. El enlace del DeCA se ha comprobado y descarga el PDF. Envíaselo al conductor antes de salir.'
+          : 'Documento generado. El enlace se ha comprobado y descarga el PDF. Envíaselo al conductor antes de salir.';
       est.aviso = avisoHecho;
       est.avisoBien = true;
       pinta();
@@ -3301,6 +3733,54 @@ create policy "deca_subir_titular" on storage.objects
     const a = document.createElement('a'); a.href = u; a.download = nombre;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(u), 60000);
+  }
+  const cartaBytes = d => crearCartaPdf(d, { PDFLib: window.PDFLib });
+  const nombreCarta = d => `Carta-de-porte_${d.codigo}-v${d.version}.pdf`;
+  const nombreDeca = d => `${d.fecha}_${d.codigo}-v${d.version}.pdf`;
+  async function firmadaBytes(d) {
+    const k = `${d.id}-firmada`;
+    let b = await pdfLee(k);
+    if (!b) {
+      const r = await fetch(`${conf().url}/storage/v1/object/cartas-firmadas/${d.cartaFirmada.nombre}`, { headers: await cabeceras({}) });
+      if (!r.ok) throw errorHumano('No se ha podido descargar la carta firmada.');
+      b = new Uint8Array(await r.arrayBuffer());
+      await pdfPon(k, b);
+    }
+    return b;
+  }
+  /* Lo que se copia de cada documento: DeCA, carta de porte y carta firmada. */
+  function ficherosDe(d) {
+    const l = d.url ? [{ nombre: nombreDeca(d), datos: () => bytesDe(d) }] : [];
+    if (d.carta) l.push({ nombre: `${d.fecha}_${nombreCarta(d)}`, datos: () => cartaBytes(d) });
+    if (d.cartaFirmada && d.cartaFirmada.nombre) l.push({ nombre: `${d.fecha}_FIRMADA_${d.codigo}-v${d.version}.pdf`, datos: () => firmadaBytes(d) });
+    return l;
+  }
+  async function subeFirmada(input) {
+    const d = decas().find(x => x.id === input.dataset.subirFirmada);
+    const fichero = input.files && input.files[0];
+    if (!d || !fichero) return;
+    est.aviso = null;
+    try {
+      const b = new Uint8Array(await fichero.arrayBuffer());
+      if (b.length > 15 * 1024 * 1024) throw errorHumano('El PDF supera los 15 MB permitidos.');
+      if (!(b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46)) throw errorHumano('Ese archivo no es un PDF.');
+      const txt = new TextDecoder('latin1').decode(b);
+      const tipo = /\/ByteRange/.test(txt) && /\/Type\s*\/Sig\b|\/SubFilter/.test(txt) ? 'electronica' : 'escaneada';
+      const nombre = `${d.uuid}-${Date.now()}.pdf`;
+      const r = await fetch(`${conf().url}/storage/v1/object/cartas-firmadas/${nombre}`, {
+        method: 'POST', headers: await cabeceras({ 'Content-Type': 'application/pdf', 'x-upsert': 'false' }), body: new Blob([b], { type: 'application/pdf' }),
+      });
+      if (r.status === 404 || r.status === 400) throw errorHumano('Falta el espacio para las cartas firmadas. Ejecuta de nuevo el código de preparación en el SQL Editor de Supabase.');
+      if (!r.ok) throw errorHumano(`El almacén no ha guardado el PDF (error ${r.status}).`);
+      await pdfPon(`${d.id}-firmada`, b);
+      await guardaRegistro(d.id, 'deca', { ...d, cartaFirmada: { tipo, nombre, fecha: new Date().toISOString() } });
+      await recarga();
+      if (driveActivo()) ls.set('deca_drive_cola', [...driveCola().filter(x => x !== d.id), d.id]);
+      est.aviso = tipo === 'electronica' ? 'Carta firmada guardada. El PDF contiene una firma electrónica. La app no comprueba su validez.' : 'PDF guardado, pero no contiene firma electrónica. Sirve como copia de la carta firmada en papel.';
+      est.avisoBien = true;
+      pinta();
+      driveSube().then(() => pinta()).catch(() => {});
+    } catch (e) { est.aviso = mensajeRed(e); est.avisoBien = false; pinta(); }
   }
   /* ZIP sin compresión: los PDF ya van comprimidos. */
   const crcT = (() => { const t = []; for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
@@ -3348,8 +3828,9 @@ create policy "deca_subir_titular" on storage.objects
       await sincroniza();
       await recarga();
       est.ocupado = false;
-      ir('ajustes');
-      est.aviso = 'Conexión comprobada. Escribe los datos de tu empresa y guarda.';
+      est.ajustesForm = null;
+      ir('basedatos');
+      est.aviso = 'Conexión comprobada. Escribe los datos de tu empresa y guarda.'; est.avisoBien = true;
       pinta();
     } catch (e) {
       if (anterior) ls.set('deca_conf', anterior); else ls.del('deca_conf');
@@ -3363,7 +3844,9 @@ create policy "deca_subir_titular" on storage.objects
     const t = ev.target;
     if (t.dataset.p && est.form) {
       setPath(est.form, t.dataset.p, t.value);
+      if (t.dataset.p === 'tipo') { est.form.carta.activa = t.value !== 'deca'; est.errores = {}; }
       ls.set('deca_borrador', { form: est.form, modificando: est.modificando });
+      if ('repinta' in t.dataset) pinta();
     }
     if (t.dataset.a && est.ajustesForm) est.ajustesForm[t.dataset.a] = t.value;
     if (t.id === 'p-email') {
@@ -3377,11 +3860,29 @@ create policy "deca_subir_titular" on storage.objects
       $('#res-historico').innerHTML = l.length ? `<div class="lista">${l.map(fila).join('')}</div>` : '<p class="vacio">No hay documentos que coincidan.</p>';
     }
   });
-  document.addEventListener('change', ev => {
+  document.addEventListener('toggle', ev => {
     const t = ev.target;
+    if (t.dataset && t.dataset.seccion) est.bdAbiertos = { ...(est.bdAbiertos || {}), [t.dataset.seccion]: t.open };
+  }, true);
+  document.addEventListener('change', async ev => {
+    const t = ev.target;
+    if (t.dataset.chk && est.form) {
+      setPath(est.form, t.dataset.chk, t.checked);
+      ls.set('deca_borrador', { form: est.form, modificando: est.modificando });
+      est.errores = {};
+      pinta();
+      return;
+    }
+    if (t.dataset.dest !== undefined && est.form) {
+      const x = agenda('destinatario').find(a => a.id === t.value);
+      est.form.envios[+t.dataset.dest].destinatario = x ? { nombre: x.nombre, direccion: x.direccion, notificaciones: x.notificaciones || '' } : { nombre: '', direccion: '', notificaciones: '' };
+      pinta();
+      return;
+    }
+    if (t.dataset.subirFirmada) { await subeFirmada(t); return; }
     if (t.dataset.agenda && est.form) {
       const x = agenda(t.dataset.agenda).find(a => a.id === t.value);
-      if (t.dataset.agenda === 'cargador') est.form.cargador = x ? { nombre: x.nombre, nif: x.nif, domicilio: x.domicilio } : { nombre: '', nif: '', domicilio: '' };
+      if (t.dataset.agenda === 'cargador') est.form.cargador = x ? { nombre: x.nombre, nif: x.nif, domicilio: x.domicilio, extranjero: !!x.extranjero } : { nombre: '', nif: '', domicilio: '', extranjero: false };
       if (t.dataset.agenda === 'vehiculo') est.form.vehiculo = x ? { matricula: x.matricula, remolque: x.remolque || '' } : { matricula: '', remolque: '' };
       pinta();
     }
@@ -3392,15 +3893,19 @@ create policy "deca_subir_titular" on storage.objects
     const d = b.dataset;
     const porId = id => decas().find(x => x.id === id);
     try {
-      if (d.ir) {
+      if (d.nuevo) {
+        const bor = ls.get('deca_borrador', null);
+        const mismo = est.form && !est.modificando && est.form.tipo === d.nuevo;
+        if (!mismo) { est.form = formNuevo({ tipo: d.nuevo }); est.modificando = null; if (bor) ls.del('deca_borrador'); }
+        ir('nuevo');
+      } else if (d.ir) {
         if (d.ir === 'nuevo') {
           if (!est.form) {
             const bor = ls.get('deca_borrador', null);
-            est.form = bor ? bor.form : formNuevo();
-            est.modificando = bor ? bor.modificando : null;
+            if (bor) { est.form = normaliza(bor.form); est.modificando = bor.modificando; }
           }
         }
-        if (d.ir === 'ajustes') est.ajustesForm = null;
+        if (d.ir === 'basedatos') { est.ajustesForm = null; est.bdEdit = null; est.bdBorrar = null; est.agError = null; est.bdAbiertos = {}; }
         ir(d.ir);
       } else if (d.ver) { ir('detalle', { detalle: d.ver });
       } else if ('masEnvio' in d) { est.form.envios.push(envioVacio()); pinta();
@@ -3417,12 +3922,12 @@ create policy "deca_subir_titular" on storage.objects
       } else if ('cancelarMod' in d) { const v = est.modificando; est.form = null; est.modificando = null; ls.del('deca_borrador'); ir('detalle', { detalle: v });
       } else if (d.modificar) {
         const o = porId(d.modificar);
-        est.form = formNuevo(JSON.parse(JSON.stringify({ fecha: o.fecha, cargador: o.cargador, transportista: o.transportista, envios: o.envios.map(e => ({ ...e, fecha: e.fecha === o.fecha ? '' : e.fecha })), vehiculo: o.vehiculo, conductor: o.conductor, aec: o.aec, observaciones: o.observaciones, motivo: '' })));
+        est.form = formNuevo(JSON.parse(JSON.stringify({ fecha: o.fecha, cargador: o.cargador, transportista: o.transportista, envios: o.envios.map(e => ({ ...e, fecha: e.fecha === o.fecha ? '' : e.fecha })), vehiculo: o.vehiculo, conductor: o.conductor, aec: o.aec, observaciones: o.observaciones, motivo: '', tipo: !o.url ? 'carta' : o.carta ? 'ambos' : 'deca', carta: o.carta ? { ...o.carta, activa: true } : { activa: false } })));
         est.modificando = o.id;
         ir('nuevo');
       } else if (d.duplicar) {
         const o = porId(d.duplicar);
-        est.form = formNuevo(JSON.parse(JSON.stringify({ cargador: o.cargador, transportista: o.transportista, envios: o.envios.map(e => ({ ...e, fecha: '' })), vehiculo: o.vehiculo, conductor: o.conductor, aec: o.aec, observaciones: o.observaciones })));
+        est.form = formNuevo(JSON.parse(JSON.stringify({ cargador: o.cargador, transportista: o.transportista, envios: o.envios.map(e => ({ ...e, fecha: '' })), vehiculo: o.vehiculo, conductor: o.conductor, aec: o.aec, observaciones: o.observaciones, tipo: !o.url ? 'carta' : o.carta ? 'ambos' : 'deca', carta: o.carta ? { ...o.carta, activa: true } : { activa: false } })));
         est.modificando = null;
         ir('nuevo');
       } else if (d.compartir) {
@@ -3437,6 +3942,29 @@ create policy "deca_subir_titular" on storage.objects
       } else if (d.abrirPdf) {
         const o = porId(d.abrirPdf);
         descarga(new Blob([await bytesDe(o)], { type: 'application/pdf' }), `${o.codigo}-v${o.version}.pdf`);
+      } else if (d.carta) {
+        const o = porId(d.carta);
+        descarga(new Blob([await cartaBytes(o)], { type: 'application/pdf' }), nombreCarta(o));
+      } else if (d.compartirCarta) {
+        const o = porId(d.compartirCarta);
+        const bytes = await cartaBytes(o);
+        const fich = new File([bytes], nombreCarta(o), { type: 'application/pdf' });
+        let hecho = false;
+        try {
+          if (navigator.canShare && navigator.canShare({ files: [fich] })) { await navigator.share({ files: [fich] }); hecho = true; }
+        } catch (e) { if (e && e.name === 'AbortError') hecho = true; }
+        if (!hecho) {
+          descarga(new Blob([bytes], { type: 'application/pdf' }), nombreCarta(o));
+          est.aviso = 'Este dispositivo no permite enviarla directamente. Se ha descargado para que la mandes tú.'; est.avisoBien = true; pinta();
+        }
+      } else if (d.firmada) {
+        const o = porId(d.firmada);
+        descarga(new Blob([await firmadaBytes(o)], { type: 'application/pdf' }), `FIRMADA_${nombreCarta(o)}`);
+      } else if (d.papel) {
+        const o = porId(d.papel);
+        await guardaRegistro(o.id, 'deca', { ...o, cartaFirmada: { tipo: 'papel', fecha: new Date().toISOString() } });
+        await recarga();
+        est.aviso = 'Anotado. Guarda tu ejemplar firmado al menos un año.'; est.avisoBien = true; pinta();
       } else if (d.comprobar) {
         const o = porId(d.comprobar);
         b.disabled = true;
@@ -3452,7 +3980,9 @@ create policy "deca_subir_titular" on storage.objects
         const ficheros = [];
         const fallos = [];
         for (const o of decas()) {
-          try { ficheros.push({ nombre: `${o.fecha}_${o.codigo}-v${o.version}.pdf`, bytes: await bytesDe(o) }); } catch (e) { fallos.push(o.codigo); }
+          for (const f of ficherosDe(o)) {
+            try { ficheros.push({ nombre: f.nombre, bytes: await f.datos() }); } catch (e) { fallos.push(f.nombre); }
+          }
         }
         ficheros.push({ nombre: 'datos.json', bytes: new TextEncoder().encode(JSON.stringify(registros.map(({ pendiente, ...r }) => r), null, 1)) });
         descarga(zip(ficheros), `DeCA-copia-${hoyISO()}.zip`);
@@ -3460,28 +3990,47 @@ create policy "deca_subir_titular" on storage.objects
         est.aviso = fallos.length ? `Copia descargada, pero faltan ${fallos.length} PDF que no se han podido leer: ${fallos.join(', ')}.` : `Copia descargada con ${ficheros.length - 1} PDF.`;
         pinta();
       } else if ('guardarAjustes' in d) {
-        const a = est.ajustesForm; a.nif = a.nif.trim().toUpperCase();
+        const a = est.ajustesForm; a.nif = limpiaId(a.nif);
         await guardaRegistro('ajustes', 'agenda', { ...a, clase: 'ajustes' });
         await recarga();
-        est.aviso = 'Ajustes guardados.'; pinta();
+        est.aviso = 'Datos de la empresa guardados.'; est.avisoBien = true; pinta();
       } else if (d.quitarAgenda) {
         const r = registros.find(x => x.id === d.quitarAgenda);
         if (r) { await guardaRegistro(r.id, 'agenda', { ...r.datos, quitado: true }); await recarga(); pinta(); }
       } else if (d.anadir) {
-        const v = id => ($(id).value || '').trim();
         const t = d.anadir;
-        est.agError = null;
-        let falta = null;
-        if (t === 'vehiculo') { if (!v('#ag-mat')) falta = 'Escribe la matrícula.'; else await guardaAgenda(t, { matricula: v('#ag-mat').toUpperCase(), remolque: v('#ag-rem').toUpperCase() }, v('#ag-mat').toUpperCase(), true); }
-        if (t === 'cargador') { if (!v('#ag-nom') || !v('#ag-nif') || !v('#ag-dom')) falta = 'Hacen falta el nombre, el NIF y el domicilio.'; else await guardaAgenda(t, { nombre: v('#ag-nom'), nif: v('#ag-nif').toUpperCase(), domicilio: v('#ag-dom') }, v('#ag-nif').toUpperCase(), true); }
-        if (t === 'conductor') { if (!v('#ag-con')) falta = 'Escribe el nombre.'; else await guardaAgenda(t, { nombre: v('#ag-con') }, v('#ag-con'), true); }
-        if (t === 'lugar') { if (!v('#ag-lug')) falta = 'Escribe el sitio.'; else await guardaAgenda(t, { nombre: v('#ag-lug') }, v('#ag-lug'), true); }
-        if (t === 'mercancia') { if (!v('#ag-mer')) falta = 'Escribe la mercancía.'; else await guardaAgenda(t, { nombre: v('#ag-mer') }, v('#ag-mer'), true); }
-        if (falta) est.agError = { t, m: falta };
-        const suyos = { vehiculo: ['ag-mat', 'ag-rem'], cargador: ['ag-nom', 'ag-nif', 'ag-dom'], conductor: ['ag-con'], lugar: ['ag-lug'], mercancia: ['ag-mer'] }[t];
-        const escritos = [...document.querySelectorAll('[id^="ag-"]')].filter(i => falta || !suyos.includes(i.id)).map(i => [i.id, i.value]);
+        const x = leeCampos(t, '');
+        const falta = CLASES[t].valida(x);
+        est.agError = falta ? { t, m: falta } : null;
+        est.bdAbiertos = { ...(est.bdAbiertos || {}), [t]: !!falta };
+        const suyos = CLASES[t].campos.map(c => c.id);
+        const escritos = [...document.querySelectorAll('[id^="ag-"]')].filter(i => falta || !suyos.includes(i.id)).map(i => [i.id, i.type === 'checkbox' ? i.checked : i.value]);
+        if (!falta) await guardaAgenda(t, x, CLASES[t].base(x), true);
+        await recarga(); est.aviso = null; pinta();
+        escritos.forEach(([i, val]) => { const el = document.getElementById(i); if (el) { if (el.type === 'checkbox') el.checked = val; else el.value = val; } });
+      } else if (d.bdEditar) { est.bdEdit = d.bdEditar; est.bdBorrar = null; est.agError = null; pinta();
+      } else if (d.bdPedir) { est.bdBorrar = d.bdPedir; est.bdEdit = null; est.agError = null; pinta();
+      } else if ('edCancelar' in d) { est.bdEdit = null; est.bdBorrar = null; est.agError = null; pinta();
+      } else if (d.edGuardar) {
+        const t = d.clase;
+        const x = leeCampos(t, 'ed-');
+        const falta = CLASES[t].valida(x);
+        if (falta) {
+          est.agError = { t, m: falta };
+          const vals = CLASES[t].campos.map(c => [c, x[c.k]]);
+          pinta();
+          vals.forEach(([c, val]) => { const el = document.getElementById('ed-' + c.id); if (el) { if (c.check) el.checked = val; else el.value = val; } });
+        } else {
+          const nuevo = PREFIJO[t] + clave(CLASES[t].base(x));
+          if (nuevo !== d.edGuardar) await borraRegistro(d.edGuardar);
+          await guardaAgenda(t, x, CLASES[t].base(x), true);
+          est.bdEdit = null; est.agError = null; est.aviso = null;
+          await recarga(); pinta();
+        }
+      } else if (d.bdBorrar) {
+        await borraRegistro(d.bdBorrar);
+        est.bdBorrar = null; est.aviso = null;
         await recarga(); pinta();
-        escritos.forEach(([i, val]) => { const el = document.getElementById(i); if (el) el.value = val; });
       } else if ('driveConectar' in d) { driveAutorizar(false, { vista: 'ajustes' });
       } else if ('driveSubir' in d) {
         if (driveToken()) { await driveSube(); est.aviso = 'Copia en Drive al día.'; pinta(); } else driveAutorizar(false, { vista: 'ajustes' });
@@ -3506,7 +4055,7 @@ create policy "deca_subir_titular" on storage.objects
   async function inicio() {
     await recarga().catch(() => {});
     const bor = ls.get('deca_borrador', null);
-    if (bor) { est.form = bor.form; est.modificando = bor.modificando; }
+    if (bor) { est.form = normaliza(bor.form); est.modificando = bor.modificando; }
     const ret = driveRetorno();
     if (ret && ret.volver) {
       if (ret.volver.detalle) { est.vista = 'detalle'; est.detalle = ret.volver.detalle; est.aviso = ret.volver.aviso; est.avisoBien = true; }
@@ -3529,7 +4078,7 @@ create policy "deca_subir_titular" on storage.objects
     }
   }
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
-  window.__deca = { est, zip, sqlPreparacion };
+  window.__deca = { est, zip, sqlPreparacion, nifValido };
   inicio();
 })();
 </script>
