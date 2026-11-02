@@ -1,0 +1,30 @@
+name: Mantener DeCA activo
+on:
+  schedule:
+    - cron: '17 6 */2 * *'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  avisar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Consultar el almacen
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          curl --fail --silent --show-error --retry 5 --retry-delay 30 \
+            "$SUPABASE_URL/rest/v1/registros?select=id&limit=1" \
+            -H "apikey: $SUPABASE_KEY" -o /dev/null
+      - uses: actions/checkout@v4
+      - name: Evitar que GitHub desactive esta tarea por inactividad
+        run: |
+          if [ "$(date +%d)" -le "02" ]; then
+            date -u > .ultima-comprobacion
+            git config user.name "deca-keepalive"
+            git config user.email "deca-keepalive@users.noreply.github.com"
+            git add .ultima-comprobacion
+            git commit -m "Comprobacion mensual" || true
+            git push
+          fi
