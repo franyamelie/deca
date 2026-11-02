@@ -133,6 +133,9 @@ main > .meta { text-align: center; }
 .anadir summary { display: flex; align-items: center; justify-content: center; min-height: 50px; border: 2px dashed var(--borde); border-radius: 4px; font-weight: 700; cursor: pointer; list-style: none; }
 .anadir summary::-webkit-details-marker { display: none; }
 .anadir[open] summary { margin-bottom: 10px; }
+
+.franja-prueba { position: sticky; top: 0; z-index: 5; display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 16px; background: #A81E12; color: #fff; }
+.franja-prueba .enlace { color: #fff; flex: none; }
 </style>
 </head>
 <body>
@@ -2476,6 +2479,16 @@ var qrcode = function() {
       .replace(/[^\x20-\x7E¡-ÿ€]/g, '?');
   }
 
+  /* Marca visible en cada página de los documentos del modo prueba. */
+  function marcaPrueba(pagina, neg, libs) {
+    const { rgb, degrees } = libs.PDFLib;
+    const rojo = rgb(0.66, 0.12, 0.07);
+    const { width, height } = pagina.getSize();
+    pagina.drawText('PRUEBA, SIN VALIDEZ', { x: 95, y: 190, size: 52, font: neg, color: rojo, opacity: 0.2, rotate: degrees(50) });
+    const t = 'DOCUMENTO DE PRUEBA, SIN VALIDEZ. NO USAR EN NINGÚN TRANSPORTE.';
+    pagina.drawRectangle({ x: 0, y: height - 22, width, height: 22, color: rojo });
+    pagina.drawText(limpio(t), { x: (width - neg.widthOfTextAtSize(limpio(t), 10)) / 2, y: height - 15, size: 10, font: neg, color: rgb(1, 1, 1) });
+  }
   async function crearPdf(doc, libs) {
     const { PDFDocument, StandardFonts, rgb } = libs.PDFLib;
     const pdf = await PDFDocument.create();
@@ -2657,6 +2670,7 @@ var qrcode = function() {
       p.drawLine({ start: { x: M, y: M + 14 }, end: { x: A4[0] - M, y: M + 14 }, thickness: 0.6, color: linea });
       p.drawText(limpio(`${doc.codigo}, versión ${doc.version}. Documento nativo digital. Sin firma: no es necesaria para su validez como documento de control.`), { x: M, y: M + 3, size: 7, font: reg, color: suave });
       p.drawText(`${i + 1} / ${paginas.length}`, { x: A4[0] - M - 22, y: M + 3, size: 7, font: reg, color: suave });
+      if (doc.prueba) marcaPrueba(p, neg, libs);
     });
 
     return pdf.save({ updateFieldAppearances: false });
@@ -2775,6 +2789,7 @@ var qrcode = function() {
       p.drawLine({ start: { x: M, y: M + 11 }, end: { x: A4[0] - M, y: M + 11 }, thickness: 0.6, color: linea });
       p.drawText(limpio(`${doc.codigo}. Carta de porte, Ley 15/2009 del contrato de transporte terrestre de mercancías.`), { x: M, y: M + 2, size: 7, font: reg, color: suave });
       p.drawText(`${i + 1} / ${paginas.length}`, { x: A4[0] - M - 24, y: M + 2, size: 7, font: reg, color: suave });
+      if (doc.prueba) marcaPrueba(p, neg, libs);
     });
     return pdf.save({ updateFieldAppearances: false });
   }
@@ -2785,7 +2800,7 @@ var qrcode = function() {
 </script>
 <script>/* DeCA Montiel: aplicación propia para generar el documento de control. */
 (function () {
-  const BUILD = 'build-20261102-06';
+  const BUILD = 'build-20261102-07';
   const BUCKET = 'deca';
   const $ = s => document.querySelector(s);
   const app = () => $('#app');
@@ -2819,11 +2834,22 @@ var qrcode = function() {
       t.onabort = () => rej(t.error);
     });
   }
-  const regTodos = () => tx('reg', 'readonly', s => s.getAll());
-  const regPon = r => tx('reg', 'readwrite', s => s.put(r));
-  const regBorra = id => tx('reg', 'readwrite', s => s.delete(id));
-  const pdfPon = (k, bytes) => tx('pdf', 'readwrite', s => s.put(bytes, k));
-  const pdfLee = k => tx('pdf', 'readonly', s => s.get(k));
+  /* Modo prueba: todo vive en memoria y desaparece al salir o recargar. */
+  const mem = { regs: [], pdf: new Map() };
+  const prueba = () => est.prueba === true;
+  const BORRADOR = () => (prueba() ? 'deca_borrador_prueba' : 'deca_borrador');
+  const regTodosReal = () => tx('reg', 'readonly', s => s.getAll());
+  const regTodos = async () => (prueba() ? mem.regs.slice() : regTodosReal());
+  const regPon = async r => {
+    if (prueba()) { mem.regs = mem.regs.filter(x => x.id !== r.id).concat(r); return; }
+    return tx('reg', 'readwrite', s => s.put(r));
+  };
+  const regBorra = async id => {
+    if (prueba()) { mem.regs = mem.regs.filter(x => x.id !== id); return; }
+    return tx('reg', 'readwrite', s => s.delete(id));
+  };
+  const pdfPon = async (k, bytes) => { if (prueba()) { mem.pdf.set(k, bytes); return; } return tx('pdf', 'readwrite', s => s.put(bytes, k)); };
+  const pdfLee = async k => (prueba() ? mem.pdf.get(k) : tx('pdf', 'readonly', s => s.get(k)));
 
   /* ---------- Conexión con el almacén ---------- */
   const conf = () => ls.get('deca_conf', null);
@@ -2864,6 +2890,7 @@ var qrcode = function() {
     return { apikey: conf().key, Authorization: `Bearer ${await token()}`, ...extra };
   }
   async function subirPdf(nombre, bytes) {
+    if (prueba()) return;
     const r = await fetch(`${conf().url}/storage/v1/object/${BUCKET}/${nombre}`, {
       method: 'POST',
       headers: await cabeceras({ 'Content-Type': 'application/pdf', 'x-upsert': 'false', 'cache-control': '3600' }),
@@ -2877,12 +2904,14 @@ var qrcode = function() {
   }
   /* Comprueba, como lo haría un agente, que el enlace descarga un PDF sin pedir nada. */
   async function compruebaEnlace(url) {
+    if (prueba()) return true;
     const r = await fetch(url, { cache: 'no-store' });
     if (!r.ok) return false;
     const b = new Uint8Array(await r.arrayBuffer());
     return b.length > 4 && b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46;
   }
   async function subeRegistro(reg) {
+    if (prueba()) return;
     const r = await fetch(`${conf().url}/rest/v1/registros?on_conflict=id`, {
       method: 'POST',
       headers: await cabeceras({ 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' }),
@@ -2892,6 +2921,7 @@ var qrcode = function() {
   }
   /* Elimina de verdad una fila de la agenda. El almacén no permite borrar documentos. */
   async function borraRegistro(id) {
+    if (prueba()) { await regBorra(id); return; }
     const r = await fetch(`${conf().url}/rest/v1/registros?id=eq.${encodeURIComponent(id)}`, {
       method: 'DELETE', headers: await cabeceras({ Prefer: 'return=representation' }),
     });
@@ -2907,7 +2937,7 @@ var qrcode = function() {
     return reg;
   }
   async function sincroniza() {
-    if (!conf() || !sesion()) return { ok: false };
+    if (prueba() || !conf() || !sesion()) return { ok: false };
     const locales = await regTodos();
     for (const reg of locales.filter(x => x.pendiente)) {
       await subeRegistro(reg); reg.pendiente = false; await regPon(reg);
@@ -2987,7 +3017,7 @@ var qrcode = function() {
   /* ---------- Copia en Google Drive (nunca bloquea el DeCA) ---------- */
   const DRIVE_CLIENT = '322929735993-rasn2bg5nrppq35to944f4g2tqpbo423.apps.googleusercontent.com';
   const DRIVE_CARPETA = 'DeCA Montiel';
-  const driveActivo = () => ls.get('deca_drive_activo', false);
+  const driveActivo = () => !prueba() && ls.get('deca_drive_activo', false);
   const driveCola = () => ls.get('deca_drive_cola', []);
   const driveToken = () => { const t = ls.get('deca_drive_token', null); return t && Date.now() < t.exp - 60000 ? t.valor : null; };
   const driveRedirect = () => location.origin + location.pathname.replace(/\/(index\.html)?$/, '');
@@ -3403,8 +3433,8 @@ var qrcode = function() {
       <div class="acciones">
         <button class="primario" data-compartir="${esc(d.id)}">Enviar al conductor</button>
         <button class="secundario" data-abrir-pdf="${esc(d.id)}">Abrir el PDF del DeCA</button>
-        <button class="secundario" data-comprobar="${esc(d.id)}">Comprobar el enlace</button>
-        <button class="secundario" data-copiar="${esc(d.id)}">Copiar el enlace</button>
+        ${d.prueba ? '<p class="nota">En modo prueba el QR y el enlace no funcionan, porque no se sube nada.</p>' : `<button class="secundario" data-comprobar="${esc(d.id)}">Comprobar el enlace</button>
+        <button class="secundario" data-copiar="${esc(d.id)}">Copiar el enlace</button>`}
         ${sucesor ? '' : `<button class="secundario" data-modificar="${esc(d.id)}">Modificar</button>`}
         <button class="secundario" data-duplicar="${esc(d.id)}">Usar como base de otro</button>
       </div>
@@ -3502,8 +3532,11 @@ create policy "cartas_leer_titular" on storage.objects
     return `<h1>Ajustes</h1>
       ${est.aviso ? `<p class="ok" role="status">${esc(est.aviso)}</p>` : ''}
       <p>Los datos de tu empresa, vehículos y clientes están en <button class="enlace" data-ir="basedatos">Base de datos</button>.</p>
-      <h2>Copia en Google Drive</h2>
-      ${driveActivo()
+      <h2>Modo prueba</h2>
+      <p>Prueba la app sin tocar tus datos reales: no se sube nada, y los PDF salen marcados como prueba, sin validez. Puedes usar tu base de datos como base, pero lo que cambies se pierde al salir o recargar la página.</p>
+      ${prueba() ? '<button class="primario" data-salir-prueba>Salir del modo prueba</button>' : '<button class="secundario" data-entrar-prueba>Entrar en modo prueba</button>'}
+      ${prueba() ? '' : `<h2>Copia en Google Drive</h2>`}
+      ${prueba() ? '' : driveActivo()
         ? `<p>${driveCola().length ? `Faltan ${driveCola().length} PDF por copiar en la carpeta ${DRIVE_CARPETA}.` : `Activada. Cada PDF se copia en la carpeta ${DRIVE_CARPETA}.`}</p>
            ${driveCola().length ? '<button class="secundario" data-drive-subir>Copiar ahora</button>' : ''}
            <button class="secundario" data-drive-quitar>Desactivar la copia</button>`
@@ -3511,9 +3544,9 @@ create policy "cartas_leer_titular" on storage.objects
            <button class="secundario" data-drive-conectar>Conectar Google Drive</button>`}
       <h2>Almacén</h2>
       <p class="meta">${esc(conf() ? conf().url : 'Sin conectar')}${conf() && conf().email ? `, ${esc(conf().email)}` : ''}</p>
-      <button class="secundario" data-sync>Sincronizar ahora</button>
+      ${prueba() ? '' : `<button class="secundario" data-sync>Sincronizar ahora</button>
       <button class="secundario" data-ir="prep">Cambiar la conexión</button>
-      <button class="secundario" data-salir>Salir de este dispositivo</button>
+      <button class="secundario" data-salir>Salir de este dispositivo</button>`}
       <p class="pie-legal">Aplicación propia de Talleres Montiel. No es del Ministerio de Transportes ni está homologada, porque no existe ninguna homologación del DeCA. Marca del programa: ${BUILD}.</p>`;
   }
   const CLASES = {
@@ -3624,6 +3657,7 @@ create policy "cartas_leer_titular" on storage.objects
     }
     const cuerpo = { inicio: vistaInicio, nuevo: vistaForm, revisar: vistaRevisar, detalle: vistaDetalle, historico: vistaHistorico, ajustes: vistaAjustes, basedatos: vistaBaseDatos, prep: vistaPrep }[est.vista]();
     app().innerHTML = `<header class="cab"><span class="marca">DeCA Montiel</span><span class="build">${BUILD}</span></header>
+      ${prueba() ? '<div class="franja-prueba" role="status"><span><strong>Modo prueba.</strong> Nada se guarda y los documentos no tienen validez.</span><button class="enlace" data-salir-prueba>Salir</button></div>' : ''}
       <main>${cuerpo}</main>${est.vista === 'prep' ? '' : barra()}`;
   }
 
@@ -3672,11 +3706,11 @@ create policy "cartas_leer_titular" on storage.objects
       const emitido = new Date().toISOString();
       const nombre = `${uuid}.pdf`;
       const conDeca = f.tipo !== 'carta';
-      const url = conDeca ? `${conf().url}/storage/v1/object/public/${BUCKET}/${nombre}?download` : null;
+      const url = !conDeca ? null : prueba() ? `https://modo-prueba.invalid/${nombre}` : `${conf().url}/storage/v1/object/public/${BUCKET}/${nombre}?download`;
       const previo = est.modificando ? decas().find(x => x.id === est.modificando) : null;
       const doc = {
-        id: 'deca-' + uuid, uuid, url, emitido,
-        codigo: previo ? previo.codigo : `${conDeca ? 'DC' : 'CP'}-${f.fecha.replace(/-/g, '')}-${uuid.slice(0, 6).toUpperCase()}`,
+        id: 'deca-' + uuid, uuid, url, emitido, prueba: prueba(),
+        codigo: previo ? previo.codigo : `${prueba() ? 'PRUEBA-' : ''}${conDeca ? 'DC' : 'CP'}-${f.fecha.replace(/-/g, '')}-${uuid.slice(0, 6).toUpperCase()}`,
         version: previo ? previo.version + 1 : 1,
         fecha: f.fecha, cargador: f.cargador, transportista: f.transportista, envios: f.envios,
         vehiculo: f.vehiculo, conductor: norm(f.conductor), aec: norm(f.aec), observaciones: norm(f.observaciones),
@@ -3701,11 +3735,11 @@ create policy "cartas_leer_titular" on storage.objects
       }
       if (doc.conductor) await guardaAgenda('conductor', { nombre: doc.conductor }, doc.conductor);
       await recarga();
-      ls.del('deca_borrador');
+      ls.del(BORRADOR());
       if (driveActivo()) ls.set('deca_drive_cola', [...driveCola(), doc.id]);
       est.ocupado = false; est.form = null; est.modificando = null;
       ir('detalle', { detalle: doc.id });
-      const avisoHecho = !conDeca ? 'Carta de porte generada. Descárgala y firmadla el cargador y el transportista.'
+      const avisoHecho = prueba() ? 'Modo prueba: documento generado solo para comprobarlo. No se ha guardado nada y no tiene validez.' : !conDeca ? 'Carta de porte generada. Descárgala y firmadla el cargador y el transportista.'
         : doc.carta ? 'DeCA y carta de porte generados. El enlace del DeCA se ha comprobado y descarga el PDF. Envíaselo al conductor antes de salir.'
           : 'Documento generado. El enlace se ha comprobado y descarga el PDF. Envíaselo al conductor antes de salir.';
       est.aviso = avisoHecho;
@@ -3771,11 +3805,13 @@ create policy "cartas_leer_titular" on storage.objects
       const txt = new TextDecoder('latin1').decode(b);
       const tipo = /\/ByteRange/.test(txt) && /\/Type\s*\/Sig\b|\/SubFilter/.test(txt) ? 'electronica' : 'escaneada';
       const nombre = `${d.uuid}-${Date.now()}.pdf`;
-      const r = await fetch(`${conf().url}/storage/v1/object/cartas-firmadas/${nombre}`, {
-        method: 'POST', headers: await cabeceras({ 'Content-Type': 'application/pdf', 'x-upsert': 'false' }), body: new Blob([b], { type: 'application/pdf' }),
-      });
-      if (r.status === 404 || r.status === 400) throw errorHumano('Falta el espacio para las cartas firmadas. Ejecuta de nuevo el código de preparación en el SQL Editor de Supabase.');
-      if (!r.ok) throw errorHumano(`El almacén no ha guardado el PDF (error ${r.status}).`);
+      if (!prueba()) {
+        const r = await fetch(`${conf().url}/storage/v1/object/cartas-firmadas/${nombre}`, {
+          method: 'POST', headers: await cabeceras({ 'Content-Type': 'application/pdf', 'x-upsert': 'false' }), body: new Blob([b], { type: 'application/pdf' }),
+        });
+        if (r.status === 404 || r.status === 400) throw errorHumano('Falta el espacio para las cartas firmadas. Ejecuta de nuevo el código de preparación en el SQL Editor de Supabase.');
+        if (!r.ok) throw errorHumano(`El almacén no ha guardado el PDF (error ${r.status}).`);
+      }
       await pdfPon(`${d.id}-firmada`, b);
       await guardaRegistro(d.id, 'deca', { ...d, cartaFirmada: { tipo, nombre, fecha: new Date().toISOString() } });
       await recarga();
@@ -3849,7 +3885,7 @@ create policy "cartas_leer_titular" on storage.objects
     if (t.dataset.p && est.form) {
       setPath(est.form, t.dataset.p, t.value);
       if (t.dataset.p === 'tipo') { est.form.carta.activa = t.value !== 'deca'; est.errores = {}; }
-      ls.set('deca_borrador', { form: est.form, modificando: est.modificando });
+      ls.set(BORRADOR(), { form: est.form, modificando: est.modificando });
       if ('repinta' in t.dataset) pinta();
     }
     if (t.dataset.a && est.ajustesForm) est.ajustesForm[t.dataset.a] = t.value;
@@ -3872,7 +3908,7 @@ create policy "cartas_leer_titular" on storage.objects
     const t = ev.target;
     if (t.dataset.chk && est.form) {
       setPath(est.form, t.dataset.chk, t.checked);
-      ls.set('deca_borrador', { form: est.form, modificando: est.modificando });
+      ls.set(BORRADOR(), { form: est.form, modificando: est.modificando });
       est.errores = {};
       pinta();
       return;
@@ -3898,14 +3934,14 @@ create policy "cartas_leer_titular" on storage.objects
     const porId = id => decas().find(x => x.id === id);
     try {
       if (d.nuevo) {
-        const bor = ls.get('deca_borrador', null);
+        const bor = ls.get(BORRADOR(), null);
         const mismo = est.form && !est.modificando && est.form.tipo === d.nuevo;
-        if (!mismo) { est.form = formNuevo({ tipo: d.nuevo }); est.modificando = null; if (bor) ls.del('deca_borrador'); }
+        if (!mismo) { est.form = formNuevo({ tipo: d.nuevo }); est.modificando = null; if (bor) ls.del(BORRADOR()); }
         ir('nuevo');
       } else if (d.ir) {
         if (d.ir === 'nuevo') {
           if (!est.form) {
-            const bor = ls.get('deca_borrador', null);
+            const bor = ls.get(BORRADOR(), null);
             if (bor) { est.form = normaliza(bor.form); est.modificando = bor.modificando; }
           }
         }
@@ -3923,7 +3959,7 @@ create policy "cartas_leer_titular" on storage.objects
         } else ir('revisar');
       } else if ('volverForm' in d) { ir('nuevo');
       } else if ('generar' in d) { await generar();
-      } else if ('cancelarMod' in d) { const v = est.modificando; est.form = null; est.modificando = null; ls.del('deca_borrador'); ir('detalle', { detalle: v });
+      } else if ('cancelarMod' in d) { const v = est.modificando; est.form = null; est.modificando = null; ls.del(BORRADOR()); ir('detalle', { detalle: v });
       } else if (d.modificar) {
         const o = porId(d.modificar);
         est.form = formNuevo(JSON.parse(JSON.stringify({ fecha: o.fecha, cargador: o.cargador, transportista: o.transportista, envios: o.envios.map(e => ({ ...e, fecha: e.fecha === o.fecha ? '' : e.fecha })), vehiculo: o.vehiculo, conductor: o.conductor, aec: o.aec, observaciones: o.observaciones, motivo: '', tipo: !o.url ? 'carta' : o.carta ? 'ambos' : 'deca', carta: o.carta ? { ...o.carta, activa: true } : { activa: false } })));
@@ -3942,6 +3978,7 @@ create policy "cartas_leer_titular" on storage.objects
           const fich = new File([await bytesDe(o)], `${o.codigo}-v${o.version}.pdf`, { type: 'application/pdf' });
           if (navigator.canShare && navigator.canShare({ files: [fich] })) { await navigator.share({ files: [fich], text: texto }); hecho = true; }
         } catch (e) { if (e && e.name === 'AbortError') hecho = true; }
+        if (!hecho && o.prueba) { descarga(new Blob([await bytesDe(o)], { type: 'application/pdf' }), `${o.codigo}.pdf`); hecho = true; }
         if (!hecho) window.open(`https://wa.me/?text=${encodeURIComponent(texto)}`, '_blank', 'noopener');
       } else if (d.abrirPdf) {
         const o = porId(d.abrirPdf);
@@ -4035,6 +4072,25 @@ create policy "cartas_leer_titular" on storage.objects
         await borraRegistro(d.bdBorrar);
         est.bdBorrar = null; est.aviso = null;
         await recarga(); pinta();
+      } else if ('entrarPrueba' in d) {
+        const reales = await regTodosReal();
+        mem.regs = reales.filter(r => r.tipo === 'agenda').map(r => JSON.parse(JSON.stringify({ ...r, pendiente: false })));
+        mem.pdf = new Map();
+        est.prueba = true;
+        ls.del(BORRADOR());
+        est.form = null; est.modificando = null; est.ajustesForm = null; est.detalle = null;
+        await recarga();
+        ir('inicio');
+      } else if ('salirPrueba' in d) {
+        ls.del(BORRADOR());
+        est.prueba = false;
+        mem.regs = []; mem.pdf = new Map();
+        est.ajustesForm = null; est.detalle = null; est.modificando = null; est.form = null;
+        const bor = ls.get(BORRADOR(), null);
+        if (bor) { est.form = normaliza(bor.form); est.modificando = bor.modificando; }
+        await recarga();
+        ir('ajustes');
+        est.aviso = 'Has salido del modo prueba. Vuelves a tus datos reales, sin cambios.'; est.avisoBien = true; pinta();
       } else if ('driveConectar' in d) { driveAutorizar(false, { vista: 'ajustes' });
       } else if ('driveSubir' in d) {
         if (driveToken()) { await driveSube(); est.aviso = 'Copia en Drive al día.'; pinta(); } else driveAutorizar(false, { vista: 'ajustes' });
@@ -4058,7 +4114,7 @@ create policy "cartas_leer_titular" on storage.objects
   /* ---------- Arranque ---------- */
   async function inicio() {
     await recarga().catch(() => {});
-    const bor = ls.get('deca_borrador', null);
+    const bor = ls.get(BORRADOR(), null);
     if (bor) { est.form = normaliza(bor.form); est.modificando = bor.modificando; }
     const ret = driveRetorno();
     if (ret && ret.volver) {
@@ -4082,7 +4138,7 @@ create policy "cartas_leer_titular" on storage.objects
     }
   }
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
-  window.__deca = { est, zip, sqlPreparacion, nifValido };
+  window.__deca = { est, zip, sqlPreparacion, nifValido, mem };
   inicio();
 })();
 </script>
