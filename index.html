@@ -2739,7 +2739,9 @@ var qrcode = function() {
         if (doc.transportista.tarjeta) parPort.push(['Tarjeta de transporte', doc.transportista.tarjeta]);
         if (e.tercero) parPort.push(['Tercero que recibe por su cuenta', e.tercero]);
         fila(['Cargador', parCarg], ['Transportista efectivo (porteador)', parPort]);
-        const parDest = [['Nombre o razón social', e.destinatario.nombre], ['Dirección', e.destinatario.direccion]];
+        const parDest = [['Nombre o razón social', e.destinatario.nombre]];
+        if (e.destinatario.nif) parDest.push(['CIF', e.destinatario.nif]);
+        parDest.push(['Dirección', e.destinatario.direccion]);
         if (e.destinatario.notificaciones) parDest.push(['Dirección para notificaciones', e.destinatario.notificaciones]);
         const exp = doc.carta.expedidor || {};
         fila(['Destinatario', parDest], exp.nombre ? ['Expedidor', [['Nombre o razón social', exp.nombre], ['NIF', exp.nif], ['Dirección', exp.domicilio]]] : ['Vehículo', [['Matrícula', doc.vehiculo.matricula + (doc.vehiculo.remolque ? ' + ' + doc.vehiculo.remolque : '')]].concat(doc.conductor ? [['Conductor', doc.conductor]] : [])]);
@@ -2783,7 +2785,7 @@ var qrcode = function() {
 </script>
 <script>/* DeCA Montiel: aplicación propia para generar el documento de control. */
 (function () {
-  const BUILD = 'build-20261102-05';
+  const BUILD = 'build-20261102-06';
   const BUCKET = 'deca';
   const $ = s => document.querySelector(s);
   const app = () => $('#app');
@@ -2942,7 +2944,7 @@ var qrcode = function() {
   const clave = t => String(t || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').slice(0, 60);
   const envioVacio = () => ({
     fecha: '', origen: '', destino: '', naturaleza: '', cantidad: '', unidad: 'kg',
-    horaRecogida: '', fechaEntrega: '', horaEntrega: '', destinatario: { nombre: '', direccion: '', notificaciones: '' },
+    horaRecogida: '', fechaEntrega: '', horaEntrega: '', destinatario: { nombre: '', nif: '', direccion: '', notificaciones: '' },
     bultos: '', marcas: '', embalaje: '', peligrosa: 'no', denominacionAdr: '',
     precio: '', gastos: '', precioAparte: false, referenciaPrecio: '', pagador: 'cargador', valor: '', tercero: '',
   });
@@ -3111,6 +3113,7 @@ var qrcode = function() {
       f.envios.forEach((x, i) => {
         const r = `envios.${i}.`;
         if (!x.destinatario.nombre.trim()) e[r + 'destinatario.nombre'] = 'Falta el destinatario.';
+        if (x.destinatario.nif.trim() && !nifValido(x.destinatario.nif)) e[r + 'destinatario.nif'] = 'Este CIF no es válido. Revísalo o déjalo vacío.';
         if (!x.destinatario.direccion.trim()) e[r + 'destinatario.direccion'] = 'Falta la dirección del destinatario.';
         if (!x.fechaEntrega) e[r + 'fechaEntrega'] = 'Indica la fecha prevista de entrega.';
         else if (x.fechaEntrega < (x.fecha || f.fecha)) e[r + 'fechaEntrega'] = 'La entrega no puede ser anterior a la recogida.';
@@ -3206,6 +3209,7 @@ var qrcode = function() {
         <select id="sel-dest-${i}" data-dest="${i}"><option value="">Escribir uno nuevo</option>
         ${destinatarios.map(d => `<option value="${esc(d.id)}" ${d.nombre === e.destinatario.nombre ? 'selected' : ''}>${esc(d.nombre)}</option>`).join('')}</select></div>` : ''}
       ${campo(r + 'destinatario.nombre', 'Destinatario', e.destinatario.nombre)}
+      ${campo(r + 'destinatario.nif', 'CIF del destinatario', e.destinatario.nif, { opcional: true, mayus: true })}
       ${campo(r + 'destinatario.direccion', 'Dirección del destinatario', e.destinatario.direccion)}
       ${campo(r + 'destinatario.notificaciones', 'Dirección para notificaciones', e.destinatario.notificaciones, { opcional: true })}
       ${campo(r + 'horaRecogida', 'Hora de recogida', e.horaRecogida, { tipo: 'time', opcional: true })}
@@ -3527,9 +3531,9 @@ create policy "cartas_leer_titular" on storage.objects
     },
     destinatario: {
       titulo: 'Destinatarios', vacio: 'Todavía no hay ninguno.',
-      campos: [{ k: 'nombre', et: 'Nombre o razón social', id: 'ag-dnom' }, { k: 'direccion', et: 'Dirección', id: 'ag-ddir' }, { k: 'notificaciones', et: 'Dirección para notificaciones <span class="op">(opcional)</span>', id: 'ag-dnot' }],
-      valida: x => (!x.nombre || !x.direccion ? 'Hacen falta el nombre y la dirección.' : ''),
-      base: x => x.nombre, txt: x => `${x.nombre}, ${x.direccion}`,
+      campos: [{ k: 'nombre', et: 'Nombre o razón social', id: 'ag-dnom' }, { k: 'nif', et: 'CIF <span class="op">(opcional)</span>', id: 'ag-dnif', mayus: true }, { k: 'direccion', et: 'Dirección', id: 'ag-ddir' }, { k: 'notificaciones', et: 'Dirección para notificaciones <span class="op">(opcional)</span>', id: 'ag-dnot' }],
+      valida: x => (!x.nombre || !x.direccion ? 'Hacen falta el nombre y la dirección.' : x.nif && !nifValido(x.nif) ? 'Ese CIF no es válido. Revísalo o déjalo vacío.' : ''),
+      base: x => x.nombre, txt: x => `${x.nombre}${x.nif ? ', ' + x.nif : ''}, ${x.direccion}`,
     },
     conductor: {
       titulo: 'Conductores', vacio: 'Todavía no hay ninguno.',
@@ -3661,7 +3665,7 @@ create policy "cartas_leer_titular" on storage.objects
       f.cargador.nif = f.cargador.extranjero ? f.cargador.nif : limpiaId(f.cargador.nif);
       f.transportista.nif = limpiaId(f.transportista.nif);
       f.carta.expedidor.nif = limpiaId(f.carta.expedidor.nif);
-      f.envios.forEach(e => { e.cantidad = String(e.cantidad).trim(); });
+      f.envios.forEach(e => { e.cantidad = String(e.cantidad).trim(); if (e.destinatario) e.destinatario.nif = limpiaId(e.destinatario.nif); });
       f.envios.forEach(e => { if (!e.fecha || f.envios.length === 1) e.fecha = f.fecha; });
       f.fecha = f.envios.map(e => e.fecha).sort()[0];
       const uuid = crypto.randomUUID();
@@ -3875,7 +3879,7 @@ create policy "cartas_leer_titular" on storage.objects
     }
     if (t.dataset.dest !== undefined && est.form) {
       const x = agenda('destinatario').find(a => a.id === t.value);
-      est.form.envios[+t.dataset.dest].destinatario = x ? { nombre: x.nombre, direccion: x.direccion, notificaciones: x.notificaciones || '' } : { nombre: '', direccion: '', notificaciones: '' };
+      est.form.envios[+t.dataset.dest].destinatario = x ? { nombre: x.nombre, nif: x.nif || '', direccion: x.direccion, notificaciones: x.notificaciones || '' } : { nombre: '', nif: '', direccion: '', notificaciones: '' };
       pinta();
       return;
     }
