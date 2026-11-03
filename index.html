@@ -2794,18 +2794,111 @@ var qrcode = function() {
     return pdf.save({ updateFieldAppearances: false });
   }
 
-  root.DecaPdf = { crearPdf, crearCartaPdf, fechaHora, fechaCorta, limpio };
+  /* Hoja de registro interna para transporte privado complementario (mercancía propia). */
+  async function crearMpcPdf(doc, libs) {
+    const { PDFDocument, StandardFonts, rgb } = libs.PDFLib;
+    const pdf = await PDFDocument.create();
+    const reg = await pdf.embedFont(StandardFonts.Helvetica);
+    const neg = await pdf.embedFont(StandardFonts.HelveticaBold);
+    pdf.setTitle(`Hoja de mercancía propia ${doc.codigo}`);
+    pdf.setSubject('Registro interno de transporte privado complementario');
+    pdf.setAuthor(limpio(doc.transportista.nombre));
+    pdf.setCreator('DeCA Montiel');
+    pdf.setProducer('DeCA Montiel');
+    pdf.setCreationDate(new Date(doc.emitido));
+    pdf.setModificationDate(new Date(doc.emitido));
+    const A4 = [595.28, 841.89], M = 40, ANCHO = A4[0] - M * 2;
+    const tinta = rgb(0.07, 0.11, 0.14), suave = rgb(0.33, 0.38, 0.42), linea = rgb(0.72, 0.76, 0.79);
+    let page = pdf.addPage(A4), y = A4[1] - M - (doc.prueba ? 16 : 0);
+    const nueva = () => { page = pdf.addPage(A4); y = A4[1] - M - (doc.prueba ? 16 : 0); };
+    function lineas(t, font, size, ancho) {
+      const out = []; let actual = '';
+      for (const palabra of limpio(t).split(' ')) {
+        const prueba = actual ? actual + ' ' + palabra : palabra;
+        if (font.widthOfTextAtSize(prueba, size) <= ancho) { actual = prueba; continue; }
+        if (actual) out.push(actual);
+        actual = palabra;
+        while (font.widthOfTextAtSize(actual, size) > ancho) {
+          let n = actual.length - 1;
+          while (n > 1 && font.widthOfTextAtSize(actual.slice(0, n), size) > ancho) n--;
+          out.push(actual.slice(0, n)); actual = actual.slice(n);
+        }
+      }
+      out.push(actual);
+      return out;
+    }
+    const texto = (t, x, ancho, { font = reg, size = 9.5, color = tinta, salto = 1.3 } = {}) => {
+      lineas(t, font, size, ancho).forEach(l => { page.drawText(l, { x, y: y - size, size, font, color }); y -= size * salto; });
+    };
+    const alturaPares = (pares, ancho) => pares.reduce((h, [k, v]) => h + 9 + lineas(v, reg, 9.5, ancho).length * 12 + 3, 0);
+    function bloque(titulo, pares, x, yy, w, h) {
+      page.drawRectangle({ x, y: yy - h, width: w, height: h, borderColor: linea, borderWidth: 0.8 });
+      page.drawText(limpio(titulo), { x: x + 7, y: yy - 14, size: 10, font: neg, color: tinta });
+      let c = yy - 20;
+      for (const [k, v] of pares) {
+        page.drawText(limpio(k), { x: x + 7, y: c - 7, size: 7, font: reg, color: suave });
+        c -= 9;
+        lineas(v, reg, 9.5, w - 14).forEach(l => { page.drawText(l, { x: x + 7, y: c - 9, size: 9.5, font: reg, color: tinta }); c -= 12; });
+        c -= 3;
+      }
+    }
+    function fila(a, b) {
+      const w = b ? (ANCHO - 8) / 2 : ANCHO;
+      const h = Math.max(alturaPares(a[1], w - 14), b ? alturaPares(b[1], w - 14) : 0) + 24;
+      if (y - h < M + 26) nueva();
+      bloque(a[0], a[1], M, y, w, h);
+      if (b) bloque(b[0], b[1], M + w + 8, y, w, h);
+      y -= h + 8;
+    }
+    texto('Hoja de registro de mercancía propia', M, ANCHO, { font: neg, size: 18, salto: 1.2 });
+    y -= 1;
+    texto('Transporte privado complementario (MPC). Registro interno de la empresa.', M, ANCHO, { size: 9.5, color: suave });
+    y -= 3;
+    texto(`Ref. ${doc.codigo}, versión ${doc.version}. Generada el ${fechaHora(doc.emitido)} (hora de Madrid).`, M, ANCHO, { size: 9, color: suave });
+    y -= 8;
+    if (doc.sustituye) {
+      const pares = [['Sustituye a', `${doc.sustituye.codigo}, versión ${doc.sustituye.version}`], ['Motivo del cambio', doc.sustituye.motivo]];
+      (doc.sustituye.cambios || []).forEach(x => pares.push([x.campo, `Antes: ${x.antes || '(vacío)'}. Ahora: ${x.ahora || '(vacío)'}`]));
+      fila(['Hoja modificada', pares]);
+    }
+    const parE = [['Nombre o razón social', doc.transportista.nombre], ['NIF', doc.transportista.nif], ['Domicilio', doc.transportista.domicilio || '']];
+    if (doc.transportista.tarjeta) parE.push(['Tarjeta de transporte', doc.transportista.tarjeta]);
+    const parV = [['Matrícula', doc.vehiculo.matricula]];
+    if (doc.vehiculo.remolque) parV.push(['Remolque o semirremolque', doc.vehiculo.remolque]);
+    parV.push(['Conductor', doc.conductor || '']);
+    fila(['Empresa', parE], ['Vehículo y conductor', parV]);
+    doc.envios.forEach((e, i) => {
+      const izq = [['Fecha', fechaCorta(e.fecha || doc.fecha)], ['Origen', e.origen], ['Destino', e.destino]];
+      const der = [['Mercancía', e.naturaleza], ['Peso o cantidad', `${e.cantidad} ${e.unidad}`], ['Por qué se lleva', e.motivoMpc], ['Albarán o factura', e.documentoMpc || 'No indicado']];
+      if (e.contraparteMpc) der.push(['Cliente o proveedor', e.contraparteMpc]);
+      fila([doc.envios.length > 1 ? `Viaje ${i + 1}` : 'Viaje', izq], ['Mercancía', der]);
+    });
+    fila(['Declaración de la empresa', [['Cobro del transporte', 'Este transporte no se contrata ni se factura de forma independiente. Su coste va incluido en el precio del producto o servicio.'], ['Observaciones', doc.observaciones || 'Ninguna']]]);
+    if (y - 78 < M + 26) nueva();
+    page.drawRectangle({ x: M, y: y - 70, width: ANCHO, height: 70, borderColor: linea, borderWidth: 0.8 });
+    page.drawText('Firma o sello de la empresa', { x: M + 7, y: y - 14, size: 8.5, font: neg, color: tinta });
+    const paginas = pdf.getPages();
+    paginas.forEach((p, i) => {
+      p.drawLine({ start: { x: M, y: M + 14 }, end: { x: A4[0] - M, y: M + 14 }, thickness: 0.6, color: linea });
+      p.drawText(limpio(`${doc.codigo}. No es un documento oficial ni sustituye al albarán, la factura o la documentación del vehículo y del conductor.`), { x: M, y: M + 3, size: 7, font: reg, color: suave });
+      p.drawText(`${i + 1} / ${paginas.length}`, { x: A4[0] - M - 22, y: M + 3, size: 7, font: reg, color: suave });
+      if (doc.prueba) marcaPrueba(p, neg, libs);
+    });
+    return pdf.save({ updateFieldAppearances: false });
+  }
+
+  root.DecaPdf = { crearPdf, crearCartaPdf, crearMpcPdf, fechaHora, fechaCorta, limpio };
   if (typeof module !== 'undefined') module.exports = root.DecaPdf;
 })(typeof window !== 'undefined' ? window : globalThis);
 </script>
 <script>/* DeCA Montiel: aplicación propia para generar el documento de control. */
 (function () {
-  const BUILD = 'build-20261102-07';
+  const BUILD = 'build-20261103-01';
   const BUCKET = 'deca';
   const $ = s => document.querySelector(s);
   const app = () => $('#app');
   const esc = t => String(t == null ? '' : t).replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
-  const { fechaHora, fechaCorta, crearPdf, crearCartaPdf } = window.DecaPdf;
+  const { fechaHora, fechaCorta, crearPdf, crearCartaPdf, crearMpcPdf } = window.DecaPdf;
 
   /* ---------- Almacenamiento local seguro ---------- */
   const ls = {
@@ -2977,13 +3070,14 @@ var qrcode = function() {
     horaRecogida: '', fechaEntrega: '', horaEntrega: '', destinatario: { nombre: '', nif: '', direccion: '', notificaciones: '' },
     bultos: '', marcas: '', embalaje: '', peligrosa: 'no', denominacionAdr: '',
     precio: '', gastos: '', precioAparte: false, referenciaPrecio: '', pagador: 'cargador', valor: '', tercero: '',
+    motivoMpc: '', documentoMpc: '', contraparteMpc: '',
   });
   const cartaVacia = () => ({ activa: true, lugarEmision: ajustesDatos().lugarEmision, expedidor: { nombre: '', nif: '', domicilio: '' }, instrucciones: '' });
   /* Completa con valores por defecto lo que falte en borradores o documentos anteriores. */
   function normaliza(f) {
     f.carta = { ...cartaVacia(), ...(f.carta || {}), expedidor: { nombre: '', nif: '', domicilio: '', ...((f.carta || {}).expedidor || {}) } };
     f.tipo = f.tipo || (f.carta.activa ? 'ambos' : 'deca');
-    f.carta.activa = f.tipo !== 'deca';
+    f.carta.activa = f.tipo === 'carta' || f.tipo === 'ambos';
     f.envios = (f.envios || []).map(e => ({ ...envioVacio(), ...e, destinatario: { ...envioVacio().destinatario, ...(e.destinatario || {}) } }));
     f.cargador = { extranjero: false, ...f.cargador };
     return f;
@@ -3003,7 +3097,7 @@ var qrcode = function() {
       transportista: { nombre: a.nombre, nif: a.nif, domicilio: a.domicilio, tarjeta: a.tarjeta },
       envios: [envioVacio()],
       vehiculo: { matricula: v.matricula || '', remolque: v.remolque || '' },
-      conductor: '', aec: '', observaciones: '', motivo: '',
+      conductor: '', aec: '', observaciones: '', motivo: '', mpcSinCobro: false,
       ...(base || {}),
     });
   }
@@ -3118,12 +3212,15 @@ var qrcode = function() {
   function errores(f, modificando) {
     const e = {};
     if (!f.fecha) e.fecha = 'Indica la fecha del transporte.';
-    if (!f.cargador.nombre.trim()) e['cargador.nombre'] = 'Falta el nombre del cargador.';
-    if (!f.cargador.nif.trim()) e['cargador.nif'] = 'Falta el NIF del cargador.';
-    else if (!f.cargador.extranjero && !nifValido(f.cargador.nif)) e['cargador.nif'] = 'Este NIF no es válido. Revísalo, o marca «Empresa extranjera» si lo es.';
-    if (!f.cargador.domicilio.trim()) e['cargador.domicilio'] = 'Falta el domicilio del cargador.';
-    if (!f.transportista.nombre.trim()) e['transportista.nombre'] = 'Falta el nombre del transportista.';
-    if (!f.transportista.nif.trim()) e['transportista.nif'] = 'Falta el NIF del transportista.';
+    const esMpc = f.tipo === 'mpc';
+    if (!esMpc) {
+      if (!f.cargador.nombre.trim()) e['cargador.nombre'] = 'Falta el nombre del cargador.';
+      if (!f.cargador.nif.trim()) e['cargador.nif'] = 'Falta el NIF del cargador.';
+      else if (!f.cargador.extranjero && !nifValido(f.cargador.nif)) e['cargador.nif'] = 'Este NIF no es válido. Revísalo, o marca «Empresa extranjera» si lo es.';
+      if (!f.cargador.domicilio.trim()) e['cargador.domicilio'] = 'Falta el domicilio del cargador.';
+    }
+    if (!f.transportista.nombre.trim()) e['transportista.nombre'] = esMpc ? 'Falta el nombre de la empresa.' : 'Falta el nombre del transportista.';
+    if (!f.transportista.nif.trim()) e['transportista.nif'] = esMpc ? 'Falta el NIF de la empresa.' : 'Falta el NIF del transportista.';
     else if (!nifValido(f.transportista.nif)) e['transportista.nif'] = 'Este NIF no es válido. Compáralo con la tarjeta de identificación fiscal de la empresa.';
     if (f.transportista.tarjeta.trim() && !/\d/.test(f.transportista.tarjeta)) e['transportista.tarjeta'] = 'Aquí va el número de la tarjeta de transporte. Déjalo vacío si no lo tienes.';
     if (!f.vehiculo.matricula.trim()) e['vehiculo.matricula'] = 'Falta la matrícula.';
@@ -3157,6 +3254,12 @@ var qrcode = function() {
         }
         if (String(x.gastos).trim() && !dineroValido(x.gastos)) e[r + 'gastos'] = 'Escribe los gastos en euros, solo con números.';
       });
+    }
+    if (esMpc) {
+      if (!f.transportista.domicilio.trim()) e['transportista.domicilio'] = 'Falta el domicilio de la empresa.';
+      if (!String(f.conductor || '').trim()) e.conductor = 'Indica quién conduce.';
+      f.envios.forEach((x, i) => { if (!x.motivoMpc) e[`envios.${i}.motivoMpc`] = 'Indica por qué se lleva esta mercancía.'; });
+      if (!f.mpcSinCobro) e.mpcSinCobro = 'Márcalo para continuar. Si este viaje se cobra aparte, no es mercancía propia: usa DeCA y carta de porte.';
     }
     if (modificando && !f.motivo.trim()) e.motivo = 'Explica por qué cambia el documento.';
     return e;
@@ -3202,8 +3305,8 @@ var qrcode = function() {
     const sust = decas().some(x => x.sustituye && x.sustituye.id === d.id);
     return `<button class="fila" data-ver="${esc(d.id)}">
       <span class="ruta">${esc(e.origen)} a ${esc(e.destino)}${d.envios.length > 1 ? ` y ${d.envios.length - 1} más` : ''}</span>
-      <span class="sello tipo">${!d.url ? 'Carta de porte' : d.carta ? 'DeCA y carta' : 'DeCA'}</span>
-      <span class="meta">${esc(textoFecha(d))}, ${esc(d.vehiculo.matricula)}, ${esc(d.cargador.nombre)}</span>
+      <span class="sello tipo">${d.mpc ? 'Mercancía propia' : !d.url ? 'Carta de porte' : d.carta ? 'DeCA y carta' : 'DeCA'}</span>
+      <span class="meta">${esc(textoFecha(d))}, ${esc(d.vehiculo.matricula)}, ${esc(d.mpc ? d.conductor : d.cargador.nombre)}</span>
       ${sust ? '<span class="sello sust">Sustituido</span>' : ''}
     </button>`;
   }
@@ -3213,11 +3316,12 @@ var qrcode = function() {
     const a = ajustesDatos();
     const faltan = !a.nif;
     return `<section class="placa-nuevo">
-        <h1>¿Sale un porte para otra empresa?</h1>
-        <p>Genera los documentos antes de arrancar. Con mercancía propia no hace falta DeCA.</p>
+        <h1>¿Sale un transporte?</h1>
+        <p>Genera el documento antes de arrancar. Con mercancía propia no hace falta DeCA: usa su hoja de registro.</p>
         <button class="primario grande" data-nuevo="deca">Crear DeCA</button>
         <button class="primario grande" data-nuevo="carta">Crear carta de porte</button>
         <button class="primario grande" data-nuevo="ambos">Crear los dos</button>
+        <button class="primario grande" data-nuevo="mpc">Mercancía propia (MPC)</button>
       </section>
       ${faltan ? `<p class="nota">Antes del primer documento, escribe el NIF de la empresa en <button class="enlace" data-ir="basedatos">Base de datos</button>.</p>` : ''}
       <h2>Documentos de hoy</h2>
@@ -3266,13 +3370,27 @@ var qrcode = function() {
       ${campo(r + 'tercero', 'Tercero que recibe la mercancía por cuenta del transportista', e.tercero, { opcional: true })}
     </div>`;
   }
-  const TITULOS = { deca: 'Nuevo DeCA', carta: 'Nueva carta de porte', ambos: 'Nuevo DeCA y carta de porte' };
+  const MOTIVOS_MPC = ['Mercancía de la empresa', 'Vendida por la empresa', 'Comprada por la empresa', 'Fabricada o transformada por la empresa', 'Reparada o para reparar por la empresa', 'Alquilada por la empresa'];
+  function camposMpc(e, i) {
+    const r = `envios.${i}.`;
+    const err = est.errores[r + 'motivoMpc'];
+    return `<div class="sub-carta"><h3>Para la hoja de registro</h3>
+      <div class="campo"><label for="mot${i}">Por qué se lleva</label>
+        <select id="mot${i}" data-p="${r}motivoMpc" data-repinta><option value="">Elige una opción</option>
+        ${MOTIVOS_MPC.map(m => `<option ${e.motivoMpc === m ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select>
+        ${err ? `<p class="error" role="alert">${esc(err)}</p>` : ''}</div>
+      ${campo(r + 'documentoMpc', 'Número de albarán o factura', e.documentoMpc, { opcional: true })}
+      ${campo(r + 'contraparteMpc', 'Cliente o proveedor', e.contraparteMpc, { opcional: true })}
+    </div>`;
+  }
+  const TITULOS = { deca: 'Nuevo DeCA', carta: 'Nueva carta de porte', ambos: 'Nuevo DeCA y carta de porte', mpc: 'Nueva hoja de mercancía propia' };
   function vistaElegir() {
     return `<h1>¿Qué quieres generar?</h1>
       <div class="opciones">
         <button class="opcion" data-nuevo="deca"><strong>DeCA</strong><span>El documento de control con QR para la inspección. Pide solo sus datos.</span></button>
         <button class="opcion" data-nuevo="carta"><strong>Carta de porte</strong><span>El documento del contrato, con destinatario, entrega y precio, para firmar. No lleva QR ni sustituye al DeCA.</span></button>
         <button class="opcion principal" data-nuevo="ambos"><strong>DeCA y carta de porte</strong><span>Los dos con los mismos datos. Es lo normal en un porte cobrado.</span></button>
+        <button class="opcion" data-nuevo="mpc"><strong>Mercancía propia (MPC)</strong><span>Hoja de registro para transporte privado complementario, sin cobrar el porte aparte. No lleva QR ni es un documento oficial.</span></button>
       </div>`;
   }
   function vistaForm() {
@@ -3283,19 +3401,19 @@ var qrcode = function() {
     const mod = est.modificando;
     const hayErr = Object.keys(est.errores).length;
     return `<h1>${mod ? 'Modificar documento' : TITULOS[f.tipo]}</h1>
-      ${mod ? `<p class="nota">${f.tipo === 'carta' ? 'Se creará una versión nueva de la carta de porte, que habrá que volver a firmar.' : 'Se creará un PDF nuevo, con otro QR, y el anterior se conservará. El conductor debe recibir el nuevo antes de seguir.'}</p>
+      ${mod ? `<p class="nota">${f.tipo === 'mpc' ? 'Se creará una versión nueva de la hoja de registro, y la anterior se conservará.' : f.tipo === 'carta' ? 'Se creará una versión nueva de la carta de porte, que habrá que volver a firmar.' : 'Se creará un PDF nuevo, con otro QR, y el anterior se conservará. El conductor debe recibir el nuevo antes de seguir.'}</p>
       ${campo('motivo', 'Motivo del cambio', f.motivo, { area: true })}` : ''}
       ${datalists()}
       <fieldset><legend>Qué quieres generar</legend>
         <div class="campo"><label for="f-tipo">Documento</label>
           <select id="f-tipo" data-p="tipo" data-repinta>
-            ${(mod && !decas().find(x => x.id === mod).url ? [['carta', 'Solo carta de porte']] : mod ? [['deca', 'DeCA'], ['ambos', 'DeCA y carta de porte']] : [['deca', 'DeCA'], ['carta', 'Carta de porte'], ['ambos', 'DeCA y carta de porte']]).map(([v, t]) => `<option value="${v}" ${f.tipo === v ? 'selected' : ''}>${t}</option>`).join('')}
+            ${(mod && f.tipo === 'mpc' ? [['mpc', 'Mercancía propia (MPC)']] : mod && !decas().find(x => x.id === mod).url ? [['carta', 'Solo carta de porte']] : mod ? [['deca', 'DeCA'], ['ambos', 'DeCA y carta de porte']] : [['deca', 'DeCA'], ['carta', 'Carta de porte'], ['ambos', 'DeCA y carta de porte'], ['mpc', 'Mercancía propia (MPC)']]).map(([v, t]) => `<option value="${v}" ${f.tipo === v ? 'selected' : ''}>${t}</option>`).join('')}
           </select></div>
         ${f.carta.activa ? `<p class="ayuda">La carta de porte es obligatoria por cada envío si contratas directamente y el precio supera 150 €. Además, cualquiera de las partes puede exigirla.</p>
         ${campo('carta.lugarEmision', 'Lugar de emisión', f.carta.lugarEmision)}` : ''}
       </fieldset>
       <fieldset><legend>Fecha</legend>${campo('fecha', 'Fecha del transporte', f.fecha, { tipo: 'date', ayuda: 'Si agrupas envíos de varios días, cada envío puede llevar su propia fecha.' })}</fieldset>
-      <fieldset><legend>Cargador contractual</legend>
+      ${f.tipo === 'mpc' ? '' : `<fieldset><legend>Cargador contractual</legend>
         <p class="ayuda">Quien os contrata el transporte.</p>
         ${cargadores.length ? `<div class="campo"><label for="sel-cargador">Elegir de la agenda</label>
           <select id="sel-cargador" data-agenda="cargador"><option value="">Escribir uno nuevo</option>
@@ -3304,12 +3422,12 @@ var qrcode = function() {
         ${campo('cargador.nif', 'NIF', f.cargador.nif, { mayus: true })}
         <label class="casilla"><input type="checkbox" data-chk="cargador.extranjero" ${f.cargador.extranjero ? 'checked' : ''}> Empresa extranjera</label>
         ${campo('cargador.domicilio', 'Domicilio', f.cargador.domicilio, { ayuda: 'Calle, número o kilómetro y población.' })}
-      </fieldset>
-      <fieldset><legend>Transportista efectivo</legend>
-        <p class="ayuda">Quien lleva la mercancía. Se rellena con Base de datos.</p>
+      </fieldset>`}
+      <fieldset><legend>${f.tipo === 'mpc' ? 'Empresa' : 'Transportista efectivo'}</legend>
+        <p class="ayuda">${f.tipo === 'mpc' ? 'La empresa dueña de la actividad. Se rellena con Base de datos.' : 'Quien lleva la mercancía. Se rellena con Base de datos.'}</p>
         ${campo('transportista.nombre', 'Nombre o razón social', f.transportista.nombre)}
         ${campo('transportista.nif', 'NIF', f.transportista.nif, { mayus: true })}
-        ${f.carta.activa ? campo('transportista.domicilio', 'Domicilio', f.transportista.domicilio) : ''}
+        ${f.carta.activa || f.tipo === 'mpc' ? campo('transportista.domicilio', 'Domicilio', f.transportista.domicilio) : ''}
         ${campo('transportista.tarjeta', 'Número de la tarjeta de transporte', f.transportista.tarjeta, { opcional: true })}
       </fieldset>
       ${f.carta.activa ? `<fieldset><legend>Expedidor</legend>
@@ -3331,6 +3449,7 @@ var qrcode = function() {
               <select id="u${i}" data-p="envios.${i}.unidad">${['kg', 't', 'piezas', 'palés', 'm³'].map(u => `<option ${u === e.unidad ? 'selected' : ''}>${u}</option>`).join('')}</select></div>
           </div>
           ${f.carta.activa ? camposCarta(e, i, f) : ''}
+          ${f.tipo === 'mpc' ? camposMpc(e, i) : ''}
         </div>`).join('')}
         <button class="secundario" data-mas-envio>Añadir otro envío</button>
       </fieldset>
@@ -3340,19 +3459,34 @@ var qrcode = function() {
           ${vehiculos.map(v => `<option value="${esc(v.id)}" ${v.matricula === f.vehiculo.matricula ? 'selected' : ''}>${esc(v.matricula)}${v.remolque ? ' + ' + esc(v.remolque) : ''}</option>`).join('')}</select></div>` : ''}
         ${campo('vehiculo.matricula', 'Matrícula', f.vehiculo.matricula, { mayus: true, ayuda: 'Solo la matrícula, como 1234 ABC.' })}
         ${campo('vehiculo.remolque', 'Matrícula del remolque o semirremolque', f.vehiculo.remolque, { mayus: true, opcional: true, ayuda: 'Déjala vacía si es un camión rígido sin remolque.' })}
-        ${campo('conductor', 'Conductor', f.conductor, { lista: 'dl-conductor', opcional: true })}
+        ${campo('conductor', 'Conductor', f.conductor, { lista: 'dl-conductor', opcional: f.tipo !== 'mpc' })}
       </fieldset>
       <fieldset><legend>Otros datos</legend>
-        ${campo('aec', 'Autorización especial de circulación', f.aec, { opcional: true, ayuda: 'Solo si el vehículo circula con una.' })}
+        ${f.tipo === 'mpc' ? '' : campo('aec', 'Autorización especial de circulación', f.aec, { opcional: true, ayuda: 'Solo si el vehículo circula con una.' })}
         ${campo('observaciones', 'Observaciones o reservas', f.observaciones, { area: true, opcional: true })}
         ${f.carta.activa ? campo('carta.instrucciones', 'Instrucciones sobre trámites administrativos', f.carta.instrucciones, { area: true, opcional: true }) : ''}
       </fieldset>
+      ${f.tipo === 'mpc' ? `<fieldset><legend>Confirmación</legend>
+        <label class="casilla"><input type="checkbox" data-chk="mpcSinCobro" ${f.mpcSinCobro ? 'checked' : ''}> Este transporte no se cobra aparte: su coste va incluido en el producto o servicio</label>
+        ${est.errores.mpcSinCobro ? `<p class="error" role="alert">${esc(est.errores.mpcSinCobro)}</p>` : ''}
+      </fieldset>` : ''}
       ${hayErr ? `<p class="error fuerte" role="alert">Faltan ${hayErr} ${hayErr === 1 ? 'dato' : 'datos'}. Están marcados arriba.</p>` : ''}
       <button class="primario grande" data-revisar>Revisar</button>
       ${mod ? '<button class="secundario" data-cancelar-mod>Cancelar</button>' : ''}`;
   }
   function advertencias(f) {
     const av = [];
+    if (f.tipo === 'mpc') {
+      if ([f.fecha, ...f.envios.map(e => e.fecha)].some(x => x && x < hoyISO())) av.push('Hay una fecha anterior a hoy. Comprueba que sea correcta.');
+      f.envios.forEach(e => {
+        [e.origen, e.destino].forEach(l => { if (!/[,(]|\d{5}/.test(l)) av.push(`«${l}» debe permitir identificar el lugar. Añade la población, por ejemplo «${l}, Linares».`); });
+      });
+      av.push('Esta hoja es un registro interno, no un documento oficial. Lleva también el albarán o la factura y la documentación del camión y del conductor.');
+      if (f.envios.some(e => !e.documentoMpc.trim())) av.push('Hay mercancía sin número de albarán o factura. La hoja sola puede no bastar para acreditar el transporte.');
+      if (f.envios.some(e => /reparar/i.test(e.motivoMpc))) av.push('Si la mercancía va para reparar, la reparación debe hacerla tu empresa. Confirma con tu gestoría que este caso entra en tu tarjeta MPC.');
+      if (ajustesDatos().tipoTarjeta === 'nose') av.push('No has indicado el tipo de tarjeta del camión. Puedes hacerlo en Base de datos.');
+      return av;
+    }
     if ([f.fecha, ...f.envios.map(e => e.fecha)].some(x => x && x < hoyISO())) av.push('Hay una fecha anterior a hoy. El documento debe existir antes de empezar el transporte.');
     if (!/\d|s\/n|km/i.test(f.cargador.domicilio) || !/[,(]|\d{5}/.test(f.cargador.domicilio)) av.push('El domicilio del cargador parece incompleto. Comprueba que lleve número o kilómetro y población.');
     f.envios.forEach(e => {
@@ -3375,9 +3509,9 @@ var qrcode = function() {
       ${av.map(a => `<p class="aviso">${esc(a)}</p>`).join('')}
       <dl class="resumen">
         <dt>Fecha del transporte</dt><dd>${esc(fechaCorta(f.fecha))}</dd>
-        <dt>Cargador contractual</dt><dd>${esc(f.cargador.nombre)}<br>NIF ${esc(f.cargador.nif)}<br>${esc(f.cargador.domicilio)}</dd>
-        <dt>Transportista efectivo</dt><dd>${esc(f.transportista.nombre)}<br>NIF ${esc(f.transportista.nif)}</dd>
-        ${f.envios.map((e, i) => `<dt>${f.envios.length > 1 ? `Envío ${i + 1}` : 'Envío'}</dt><dd>${f.envios.length > 1 ? `${esc(fechaCorta(e.fecha || f.fecha))}<br>` : ''}${esc(e.origen)} a ${esc(e.destino)}<br>${esc(e.naturaleza)}, ${esc(e.cantidad)} ${esc(e.unidad)}</dd>`).join('')}
+        ${f.tipo === 'mpc' ? `<dt>Empresa</dt><dd>${esc(f.transportista.nombre)}<br>NIF ${esc(f.transportista.nif)}<br>${esc(f.transportista.domicilio)}</dd>` : `<dt>Cargador contractual</dt><dd>${esc(f.cargador.nombre)}<br>NIF ${esc(f.cargador.nif)}<br>${esc(f.cargador.domicilio)}</dd>
+        <dt>Transportista efectivo</dt><dd>${esc(f.transportista.nombre)}<br>NIF ${esc(f.transportista.nif)}</dd>`}
+        ${f.envios.map((e, i) => `<dt>${f.envios.length > 1 ? `Envío ${i + 1}` : 'Envío'}</dt><dd>${f.envios.length > 1 ? `${esc(fechaCorta(e.fecha || f.fecha))}<br>` : ''}${esc(e.origen)} a ${esc(e.destino)}<br>${esc(e.naturaleza)}, ${esc(e.cantidad)} ${esc(e.unidad)}${f.tipo === 'mpc' ? `<br>${esc(e.motivoMpc)}${e.documentoMpc ? `<br>Albarán o factura: ${esc(e.documentoMpc)}` : ''}${e.contraparteMpc ? `<br>${esc(e.contraparteMpc)}` : ''}` : ''}</dd>`).join('')}
         <dt>Vehículo</dt><dd>${esc(f.vehiculo.matricula)}${f.vehiculo.remolque ? ' + ' + esc(f.vehiculo.remolque) : ''}${f.conductor ? `<br>${esc(f.conductor)}` : ''}</dd>
         ${f.carta.activa ? `<dt>Datos de la carta de porte</dt><dd>${f.envios.map(e => `${esc(e.destinatario.nombre)}, entrega ${esc(fechaCorta(e.fechaEntrega))}, ${esc(e.bultos)} bultos, ${esc(e.embalaje)}, ${e.precioAparte ? `precio en ${esc(e.referenciaPrecio)}` : `${esc(e.precio)} €`}, paga ${esc(e.pagador)}`).join('<br>')}</dd>` : ''}
         ${f.aec ? `<dt>Autorización especial</dt><dd>${esc(f.aec)}</dd>` : ''}
@@ -3385,7 +3519,7 @@ var qrcode = function() {
         ${est.modificando ? `<dt>Motivo del cambio</dt><dd>${esc(f.motivo)}</dd>` : ''}
       </dl>
       ${est.aviso ? `<p class="error fuerte" role="alert">${esc(est.aviso)}</p>` : ''}
-      <button class="primario grande" data-generar ${est.ocupado ? 'disabled' : ''}>${est.ocupado ? 'Generando y comprobando…' : { deca: 'Generar DeCA', carta: 'Generar carta de porte', ambos: 'Generar DeCA y carta de porte' }[f.tipo]}</button>
+      <button class="primario grande" data-generar ${est.ocupado ? 'disabled' : ''}>${est.ocupado ? 'Generando y comprobando…' : { deca: 'Generar DeCA', carta: 'Generar carta de porte', ambos: 'Generar DeCA y carta de porte', mpc: 'Generar hoja de registro' }[f.tipo]}</button>
       <button class="secundario" data-volver-form ${est.ocupado ? 'disabled' : ''}>Corregir datos</button>`;
   }
   function bloqueCarta(d) {
@@ -3410,6 +3544,20 @@ var qrcode = function() {
     if (!d) return '<p class="vacio">No se encuentra el documento.</p>';
     const sucesor = decas().find(x => x.sustituye && x.sustituye.id === d.id);
     const reg = registros.find(r => r.id === d.id);
+    if (d.mpc) {
+      return `${sucesor ? `<p class="aviso">Esta hoja está sustituida. <button class="enlace" data-ver="${esc(sucesor.id)}">Abrir la vigente</button></p>` : ''}
+        ${est.aviso ? `<p class="${est.avisoBien ? 'ok' : 'aviso'}" role="status">${esc(est.aviso)}</p>` : ''}
+        <h1>Hoja de mercancía propia</h1>
+        <p class="codigo izq">${esc(d.codigo)}, versión ${esc(d.version)}</p>
+        <p class="ruta-grande izq">${esc(d.envios[0].origen)} a ${esc(d.envios[0].destino)}${d.envios.length > 1 ? ` y ${d.envios.length - 1} más` : ''}</p>
+        <p class="meta izq">Transporte del ${esc(textoFecha(d))}, ${esc(d.vehiculo.matricula)}. Generada el ${esc(fechaHora(d.emitido))}.</p>
+        <p class="nota">Es un registro interno, no un documento oficial. Lleva también el albarán o la factura y la documentación del camión y del conductor.</p>
+        ${driveActivo() ? `<p class="meta izq">${driveCola().includes(d.id) ? 'Copia en Drive pendiente.' : 'Copia guardada en Drive.'}</p>` : ''}
+        <button class="primario" data-hoja="${esc(d.id)}">Descargar la hoja</button>
+        <button class="secundario" data-compartir-hoja="${esc(d.id)}">Enviar la hoja</button>
+        ${sucesor ? '' : `<button class="secundario" data-modificar="${esc(d.id)}">Modificar</button>`}
+        <button class="secundario" data-duplicar="${esc(d.id)}">Usar como base de otra</button>`;
+    }
     if (!d.url) {
       return `${sucesor ? `<p class="aviso">Esta carta está sustituida. <button class="enlace" data-ver="${esc(sucesor.id)}">Abrir la vigente</button></p>` : ''}
         ${est.aviso ? `<p class="${est.avisoBien ? 'ok' : 'aviso'}" role="status">${esc(est.aviso)}</p>` : ''}
@@ -3672,17 +3820,19 @@ create policy "cartas_leer_titular" on storage.objects
     const c = [];
     const mira = (campo, x, y) => { if (String(x || '') !== String(y || '')) c.push({ campo, antes: x || '', ahora: y || '' }); };
     mira('Fecha', fechaCorta(a.fecha), fechaCorta(b.fecha));
-    mira('Cargador', a.cargador.nombre, b.cargador.nombre);
-    mira('NIF del cargador', a.cargador.nif, b.cargador.nif);
-    mira('Domicilio del cargador', a.cargador.domicilio, b.cargador.domicilio);
-    mira('Transportista', a.transportista.nombre, b.transportista.nombre);
-    mira('NIF del transportista', a.transportista.nif, b.transportista.nif);
+    if (!a.mpc) {
+      mira('Cargador', a.cargador.nombre, b.cargador.nombre);
+      mira('NIF del cargador', a.cargador.nif, b.cargador.nif);
+      mira('Domicilio del cargador', a.cargador.domicilio, b.cargador.domicilio);
+    }
+    mira(a.mpc ? 'Empresa' : 'Transportista', a.transportista.nombre, b.transportista.nombre);
+    mira(a.mpc ? 'NIF de la empresa' : 'NIF del transportista', a.transportista.nif, b.transportista.nif);
     mira('Matrícula', a.vehiculo.matricula, b.vehiculo.matricula);
     mira('Remolque', a.vehiculo.remolque, b.vehiculo.remolque);
     mira('Conductor', a.conductor, b.conductor);
     mira('Autorización especial', a.aec, b.aec);
     mira('Observaciones', a.observaciones, b.observaciones);
-    const tx = e => e.map(x => `${e.length > 1 ? fechaCorta(x.fecha) + ', ' : ''}${x.origen} a ${x.destino}, ${x.naturaleza}, ${x.cantidad} ${x.unidad}`).join('; ');
+    const tx = e => e.map(x => `${e.length > 1 ? fechaCorta(x.fecha) + ', ' : ''}${x.origen} a ${x.destino}, ${x.naturaleza}, ${x.cantidad} ${x.unidad}${x.motivoMpc ? `, ${x.motivoMpc}` : ''}${x.documentoMpc ? `, albarán o factura ${x.documentoMpc}` : ''}${x.contraparteMpc ? `, ${x.contraparteMpc}` : ''}`).join('; ');
     mira('Envíos', tx(a.envios), tx(b.envios));
     return c;
   }
@@ -3692,6 +3842,8 @@ create policy "cartas_leer_titular" on storage.objects
     try {
       const f = JSON.parse(JSON.stringify(est.form));
       const norm = s => String(s || '').trim();
+      const esMpc = f.tipo === 'mpc';
+      if (esMpc) f.cargador = { nombre: f.transportista.nombre, nif: f.transportista.nif, domicilio: f.transportista.domicilio, extranjero: false };
       f.cargador.nif = norm(f.cargador.nif).toUpperCase();
       f.transportista.nif = norm(f.transportista.nif).toUpperCase();
       f.vehiculo.matricula = norm(f.vehiculo.matricula).toUpperCase();
@@ -3705,12 +3857,12 @@ create policy "cartas_leer_titular" on storage.objects
       const uuid = crypto.randomUUID();
       const emitido = new Date().toISOString();
       const nombre = `${uuid}.pdf`;
-      const conDeca = f.tipo !== 'carta';
+      const conDeca = f.tipo === 'deca' || f.tipo === 'ambos';
       const url = !conDeca ? null : prueba() ? `https://modo-prueba.invalid/${nombre}` : `${conf().url}/storage/v1/object/public/${BUCKET}/${nombre}?download`;
       const previo = est.modificando ? decas().find(x => x.id === est.modificando) : null;
       const doc = {
-        id: 'deca-' + uuid, uuid, url, emitido, prueba: prueba(),
-        codigo: previo ? previo.codigo : `${prueba() ? 'PRUEBA-' : ''}${conDeca ? 'DC' : 'CP'}-${f.fecha.replace(/-/g, '')}-${uuid.slice(0, 6).toUpperCase()}`,
+        id: 'deca-' + uuid, uuid, url, emitido, prueba: prueba(), mpc: esMpc,
+        codigo: previo ? previo.codigo : `${prueba() ? 'PRUEBA-' : ''}${esMpc ? 'MP' : conDeca ? 'DC' : 'CP'}-${f.fecha.replace(/-/g, '')}-${uuid.slice(0, 6).toUpperCase()}`,
         version: previo ? previo.version + 1 : 1,
         fecha: f.fecha, cargador: f.cargador, transportista: f.transportista, envios: f.envios,
         vehiculo: f.vehiculo, conductor: norm(f.conductor), aec: norm(f.aec), observaciones: norm(f.observaciones),
@@ -3726,7 +3878,7 @@ create policy "cartas_leer_titular" on storage.objects
       }
       await guardaRegistro(doc.id, 'deca', doc);
       /* Agenda: lo usado queda guardado para la próxima vez */
-      await guardaAgenda('cargador', f.cargador, f.cargador.nif || f.cargador.nombre);
+      if (!esMpc) await guardaAgenda('cargador', f.cargador, f.cargador.nif || f.cargador.nombre);
       await guardaAgenda('vehiculo', f.vehiculo, f.vehiculo.matricula);
       if (f.carta.activa) for (const e of f.envios) await guardaAgenda('destinatario', e.destinatario, e.destinatario.nombre);
       for (const e of f.envios) {
@@ -3739,7 +3891,7 @@ create policy "cartas_leer_titular" on storage.objects
       if (driveActivo()) ls.set('deca_drive_cola', [...driveCola(), doc.id]);
       est.ocupado = false; est.form = null; est.modificando = null;
       ir('detalle', { detalle: doc.id });
-      const avisoHecho = prueba() ? 'Modo prueba: documento generado solo para comprobarlo. No se ha guardado nada y no tiene validez.' : !conDeca ? 'Carta de porte generada. Descárgala y firmadla el cargador y el transportista.'
+      const avisoHecho = prueba() ? 'Modo prueba: documento generado solo para comprobarlo. No se ha guardado nada y no tiene validez.' : esMpc ? 'Hoja de mercancía propia generada y guardada en el histórico.' : !conDeca ? 'Carta de porte generada. Descárgala y firmadla el cargador y el transportista.'
         : doc.carta ? 'DeCA y carta de porte generados. El enlace del DeCA se ha comprobado y descarga el PDF. Envíaselo al conductor antes de salir.'
           : 'Documento generado. El enlace se ha comprobado y descarga el PDF. Envíaselo al conductor antes de salir.';
       est.aviso = avisoHecho;
@@ -3773,6 +3925,8 @@ create policy "cartas_leer_titular" on storage.objects
     setTimeout(() => URL.revokeObjectURL(u), 60000);
   }
   const cartaBytes = d => crearCartaPdf(d, { PDFLib: window.PDFLib });
+  const hojaBytes = d => crearMpcPdf(d, { PDFLib: window.PDFLib });
+  const nombreHoja = d => `Hoja-mercancia-propia_${d.codigo}-v${d.version}.pdf`;
   const nombreCarta = d => `Carta-de-porte_${d.codigo}-v${d.version}.pdf`;
   const nombreDeca = d => `${d.fecha}_${d.codigo}-v${d.version}.pdf`;
   async function firmadaBytes(d) {
@@ -3788,6 +3942,7 @@ create policy "cartas_leer_titular" on storage.objects
   }
   /* Lo que se copia de cada documento: DeCA, carta de porte y carta firmada. */
   function ficherosDe(d) {
+    if (d.mpc) return [{ nombre: `${d.fecha}_${nombreHoja(d)}`, datos: () => hojaBytes(d) }];
     const l = d.url ? [{ nombre: nombreDeca(d), datos: () => bytesDe(d) }] : [];
     if (d.carta) l.push({ nombre: `${d.fecha}_${nombreCarta(d)}`, datos: () => cartaBytes(d) });
     if (d.cartaFirmada && d.cartaFirmada.nombre) l.push({ nombre: `${d.fecha}_FIRMADA_${d.codigo}-v${d.version}.pdf`, datos: () => firmadaBytes(d) });
@@ -3884,7 +4039,7 @@ create policy "cartas_leer_titular" on storage.objects
     const t = ev.target;
     if (t.dataset.p && est.form) {
       setPath(est.form, t.dataset.p, t.value);
-      if (t.dataset.p === 'tipo') { est.form.carta.activa = t.value !== 'deca'; est.errores = {}; }
+      if (t.dataset.p === 'tipo') { est.form.carta.activa = t.value === 'carta' || t.value === 'ambos'; est.errores = {}; }
       ls.set(BORRADOR(), { form: est.form, modificando: est.modificando });
       if ('repinta' in t.dataset) pinta();
     }
@@ -3962,12 +4117,12 @@ create policy "cartas_leer_titular" on storage.objects
       } else if ('cancelarMod' in d) { const v = est.modificando; est.form = null; est.modificando = null; ls.del(BORRADOR()); ir('detalle', { detalle: v });
       } else if (d.modificar) {
         const o = porId(d.modificar);
-        est.form = formNuevo(JSON.parse(JSON.stringify({ fecha: o.fecha, cargador: o.cargador, transportista: o.transportista, envios: o.envios.map(e => ({ ...e, fecha: e.fecha === o.fecha ? '' : e.fecha })), vehiculo: o.vehiculo, conductor: o.conductor, aec: o.aec, observaciones: o.observaciones, motivo: '', tipo: !o.url ? 'carta' : o.carta ? 'ambos' : 'deca', carta: o.carta ? { ...o.carta, activa: true } : { activa: false } })));
+        est.form = formNuevo(JSON.parse(JSON.stringify({ fecha: o.fecha, cargador: o.cargador, transportista: o.transportista, envios: o.envios.map(e => ({ ...e, fecha: e.fecha === o.fecha ? '' : e.fecha })), vehiculo: o.vehiculo, conductor: o.conductor, aec: o.aec, observaciones: o.observaciones, motivo: '', mpcSinCobro: !!o.mpc, tipo: o.mpc ? 'mpc' : !o.url ? 'carta' : o.carta ? 'ambos' : 'deca', carta: o.carta ? { ...o.carta, activa: true } : { activa: false } })));
         est.modificando = o.id;
         ir('nuevo');
       } else if (d.duplicar) {
         const o = porId(d.duplicar);
-        est.form = formNuevo(JSON.parse(JSON.stringify({ cargador: o.cargador, transportista: o.transportista, envios: o.envios.map(e => ({ ...e, fecha: '' })), vehiculo: o.vehiculo, conductor: o.conductor, aec: o.aec, observaciones: o.observaciones, tipo: !o.url ? 'carta' : o.carta ? 'ambos' : 'deca', carta: o.carta ? { ...o.carta, activa: true } : { activa: false } })));
+        est.form = formNuevo(JSON.parse(JSON.stringify({ cargador: o.cargador, transportista: o.transportista, envios: o.envios.map(e => ({ ...e, fecha: '' })), vehiculo: o.vehiculo, conductor: o.conductor, aec: o.aec, observaciones: o.observaciones, tipo: o.mpc ? 'mpc' : !o.url ? 'carta' : o.carta ? 'ambos' : 'deca', carta: o.carta ? { ...o.carta, activa: true } : { activa: false } })));
         est.modificando = null;
         ir('nuevo');
       } else if (d.compartir) {
@@ -3986,6 +4141,21 @@ create policy "cartas_leer_titular" on storage.objects
       } else if (d.carta) {
         const o = porId(d.carta);
         descarga(new Blob([await cartaBytes(o)], { type: 'application/pdf' }), nombreCarta(o));
+      } else if (d.hoja) {
+        const o = porId(d.hoja);
+        descarga(new Blob([await hojaBytes(o)], { type: 'application/pdf' }), nombreHoja(o));
+      } else if (d.compartirHoja) {
+        const o = porId(d.compartirHoja);
+        const bytes = await hojaBytes(o);
+        const fich = new File([bytes], nombreHoja(o), { type: 'application/pdf' });
+        let hecho = false;
+        try {
+          if (navigator.canShare && navigator.canShare({ files: [fich] })) { await navigator.share({ files: [fich] }); hecho = true; }
+        } catch (e) { if (e && e.name === 'AbortError') hecho = true; }
+        if (!hecho) {
+          descarga(new Blob([bytes], { type: 'application/pdf' }), nombreHoja(o));
+          est.aviso = 'Este dispositivo no permite enviarla directamente. Se ha descargado para que la mandes tú.'; est.avisoBien = true; pinta();
+        }
       } else if (d.compartirCarta) {
         const o = porId(d.compartirCarta);
         const bytes = await cartaBytes(o);
